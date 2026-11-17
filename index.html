@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Inventario Físico Pro - Antigravity</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- SheetJS (Offline local copy) -->
+    <script src="lib/xlsx.full.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="app-header">
+            <div class="header-logo">
+                <svg viewBox="0 0 24 24" class="logo-icon" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
+                </svg>
+                <div class="logo-text">
+                    <h1>Inventario<span>Físico</span></h1>
+                    <span class="app-version">v2.0 Offline</span>
+                </div>
+            </div>
+            <div class="header-status">
+                <div id="status-indicator" class="status-badge status-offline">
+                    <span class="status-dot"></span>
+                    <span id="status-text">Sin Archivo</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- PANTALLA 1: CARGA DE ARCHIVO -->
+        <main id="upload-view" class="view-panel active-view">
+            <div class="upload-card card">
+                <div class="card-glow"></div>
+                <div class="upload-icon-wrapper">
+                    <svg viewBox="0 0 24 24" class="upload-icon" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                        <polyline points="17 8 12 3 7 8"></polyline>
+                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                    </svg>
+                </div>
+                <h2>Cargar Catálogo de Artículos</h2>
+                <p class="upload-hint">Arrastre su archivo Excel (.xlsx, .xls) aquí o haga clic para buscar en su dispositivo.</p>
+                
+                <div class="file-input-wrapper">
+                    <button class="btn btn-primary btn-large" onclick="document.getElementById('excel-file-input').click()">
+                        Seleccionar Archivo Excel
+                    </button>
+                    <input type="file" id="excel-file-input" accept=".xlsx, .xls" style="display: none;">
+                </div>
+
+                <div class="upload-divider">
+                    <span>O</span>
+                </div>
+
+                <div class="template-section">
+                    <p>¿No tiene un archivo listo? Descargue una plantilla de ejemplo.</p>
+                    <button id="download-template-btn" class="btn btn-secondary">
+                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Descargar Plantilla Excel
+                    </button>
+                </div>
+            </div>
+        </main>
+
+        <!-- PANTALLA 2: CONTROL DE CONTEO Y BÚSQUEDA -->
+        <main id="dashboard-view" class="view-panel">
+            <!-- PANEL DE ESTADÍSTICAS -->
+            <section class="stats-grid">
+                <div class="stat-card card">
+                    <div class="stat-icon-wrapper color-info">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Total Artículos</span>
+                        <span id="stat-total" class="stat-value">0</span>
+                    </div>
+                </div>
+                <div class="stat-card card">
+                    <div class="stat-icon-wrapper color-success">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Contados</span>
+                        <span id="stat-counted" class="stat-value">0</span>
+                        <span id="stat-counted-pct" class="stat-sub">0%</span>
+                    </div>
+                </div>
+                <div class="stat-card card">
+                    <div class="stat-icon-wrapper color-warning">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Pendientes</span>
+                        <span id="stat-pending" class="stat-value">0</span>
+                    </div>
+                </div>
+                <div class="stat-card card">
+                    <div class="stat-icon-wrapper color-danger">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"></polygon><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                    </div>
+                    <div class="stat-info">
+                        <span class="stat-label">Con Diferencias</span>
+                        <span id="stat-diff" class="stat-value">0</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ACCIONES DEL ARCHIVO -->
+            <div class="actions-toolbar">
+                <div class="file-meta">
+                    <svg viewBox="0 0 24 24" class="meta-file-icon" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                    <span id="loaded-file-name" class="file-name">archivo.xlsx</span>
+                </div>
+                <div class="action-buttons">
+                    <button id="download-results-btn" class="btn btn-success">
+                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <span>Descargar Excel</span>
+                    </button>
+                    <button id="clear-counts-btn" class="btn btn-danger-outline">
+                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                        <span>Limpiar Conteos</span>
+                    </button>
+                    <button id="load-new-file-btn" class="btn btn-secondary">
+                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        <span>Cargar Nuevo</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- BÚSQUEDA Y LISTADO -->
+            <div class="search-and-list-card card">
+                <!-- Filtros y Barra de Búsqueda -->
+                <div class="search-header">
+                    <div class="search-bar-wrapper">
+                        <svg viewBox="0 0 24 24" class="search-icon" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <input type="text" id="search-input" placeholder="Buscar por Nombre (aprox.), Alterno (aprox.) o Código (exacto)..." autocomplete="off">
+                        <button id="clear-search-btn" class="clear-search-btn" style="display: none;">&times;</button>
+                    </div>
+                </div>
+
+                <!-- Tabs de Filtro de Estado -->
+                <div class="filter-tabs">
+                    <button class="filter-tab active" data-filter="all">Todos <span class="badge" id="badge-all">0</span></button>
+                    <button class="filter-tab" data-filter="pending">Pendientes <span class="badge" id="badge-pending">0</span></button>
+                    <button class="filter-tab" data-filter="counted">Contados <span class="badge" id="badge-counted">0</span></button>
+                    <button class="filter-tab" data-filter="diff">Con Diferencia <span class="badge" id="badge-diff">0</span></button>
+                </div>
+
+                <!-- Contenedor del listado (Vista dual: Tabla para PC, Tarjetas para móvil) -->
+                <div class="list-container">
+                    <!-- Vista de Tabla (Desktop) -->
+                    <div class="table-responsive-wrapper">
+                        <table class="items-table">
+                            <thead>
+                                <tr>
+                                    <th>Código</th>
+                                    <th>Alterno</th>
+                                    <th>Nombre del Artículo</th>
+                                    <th>Bodega</th>
+                                    <th class="num-col">Costo</th>
+                                    <th class="num-col">Existencia</th>
+                                    <th class="num-col">Contado</th>
+                                    <th class="num-col">Diferencia</th>
+                                    <th class="action-col">Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="items-table-body">
+                                <!-- Filas inyectadas dinámicamente -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Vista de Tarjetas (Móvil) -->
+                    <div id="items-cards-grid" class="items-cards-grid">
+                        <!-- Tarjetas inyectadas dinámicamente -->
+                    </div>
+
+                    <!-- Estado Vacío -->
+                    <div id="empty-results-state" class="empty-state" style="display: none;">
+                        <svg viewBox="0 0 24 24" class="empty-icon" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        <p>No se encontraron artículos que coincidan con la búsqueda o filtros actuales.</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- PANTALLA 3: MODAL DE CONTEO (VISTA DETALLADA) -->
+    <div id="counting-modal" class="modal-overlay">
+        <div class="modal-container">
+            <div class="modal-glow"></div>
+            
+            <div class="modal-header">
+                <h3>Registrar Conteo Físico</h3>
+                <button id="modal-close-x" class="modal-close-x-btn">&times;</button>
+            </div>
+
+            <div class="modal-body">
+                <!-- Información del Artículo -->
+                <div class="article-details-panel">
+                    <h4 id="modal-article-name">Nombre del Artículo Largo de Ejemplo</h4>
+                    <div class="details-grid">
+                        <div class="detail-item">
+                            <span class="detail-label">Código</span>
+                            <span id="modal-article-code" class="detail-val">123456</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Alterno</span>
+                            <span id="modal-article-alt" class="detail-val">ALT-9876</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Bodega</span>
+                            <span id="modal-article-wh" class="detail-val">Bodega Principal</span>
+                        </div>
+                        <div class="detail-item">
+                            <span class="detail-label">Costo</span>
+                            <span id="modal-article-cost" class="detail-val">$0.00</span>
+                        </div>
+                        <div class="detail-item highlight-existence">
+                            <span class="detail-label">Existencia Teórica</span>
+                            <span id="modal-article-exist" class="detail-val">150</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Entrada de Conteos -->
+                <div class="count-input-section">
+                    <!-- Modo 1: Calculadora Rápida / Ingreso por Fórmulas -->
+                    <div class="input-group">
+                        <label for="count-expression">Cantidad Contada (Soporta sumas, ej: 10+20+5)</label>
+                        <div class="expression-input-wrapper">
+                            <input type="text" id="count-expression" placeholder="0" inputmode="decimal" autocomplete="off">
+                            <div id="expression-preview" class="expression-preview" style="display: none;">= 0</div>
+                        </div>
+                    </div>
+
+                    <!-- Teclado Numérico Virtual -->
+                    <div class="virtual-keypad">
+                        <button class="keypad-btn" data-key="7">7</button>
+                        <button class="keypad-btn" data-key="8">8</button>
+                        <button class="keypad-btn" data-key="9">9</button>
+                        <button class="keypad-btn key-action" data-key="backspace">
+                            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" style="pointer-events: none;"><path d="M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2z"></path><line x1="18" y1="9" x2="12" y2="15"></line><line x1="12" y1="9" x2="18" y2="15"></line></svg>
+                        </button>
+                        
+                        <button class="keypad-btn" data-key="4">4</button>
+                        <button class="keypad-btn" data-key="5">5</button>
+                        <button class="keypad-btn" data-key="6">6</button>
+                        <button class="keypad-btn key-operator" data-key="+">+</button>
+                        
+                        <button class="keypad-btn" data-key="1">1</button>
+                        <button class="keypad-btn" data-key="2">2</button>
+                        <button class="keypad-btn" data-key="3">3</button>
+                        <button class="keypad-btn key-operator" data-key="-">-</button>
+                        
+                        <button class="keypad-btn key-clear" data-key="clear">C</button>
+                        <button class="keypad-btn" data-key="0">0</button>
+                        <button class="keypad-btn" data-key=".">.</button>
+                        <button class="keypad-btn key-ok" data-key="ok">OK</button>
+                    </div>
+
+                    <!-- Botones de Incremento Rápido -->
+                    <div class="quick-adjust-buttons">
+                        <button class="btn btn-adjust" data-val="-10">-10</button>
+                        <button class="btn btn-adjust" data-val="-5">-5</button>
+                        <button class="btn btn-adjust" data-val="-1">-1</button>
+                        <button class="btn btn-adjust" data-val="1">+1</button>
+                        <button class="btn btn-adjust" data-val="5">+5</button>
+                        <button class="btn btn-adjust" data-val="10">+10</button>
+                    </div>
+
+                    <!-- Separador o Expandible para Conteos Parciales (Historial Acumulativo) -->
+                    <div class="accumulative-section">
+                        <div class="section-title-toggle">
+                            <h5>Acumular Conteos Parciales (Opcional)</h5>
+                            <span class="help-tooltip" title="Ideal para sumar conteos por estantes o cajas. Escriba la cantidad, un nombre opcional y agréguelo.">?</span>
+                        </div>
+                        
+                        <div class="accumulate-form">
+                            <input type="number" id="partial-qty" placeholder="Cantidad" inputmode="numeric">
+                            <input type="text" id="partial-desc" placeholder="Ubicación/Caja (opcional)">
+                            <button id="add-partial-btn" class="btn btn-info-outline">Agregar</button>
+                        </div>
+
+                        <div class="partial-list-container">
+                            <ul id="partial-list" class="partial-list">
+                                <!-- Lista de sumandos parciales -->
+                            </ul>
+                            <div id="partial-empty" class="partial-empty">No hay conteos parciales registrados aún.</div>
+                        </div>
+                    </div>
+
+                    <!-- Vista Previa de Resultados -->
+                    <div class="calculation-summary">
+                        <div class="summary-item">
+                            <span class="summary-label">Total Contado</span>
+                            <span id="summary-total-counted" class="summary-value">0</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">Diferencia</span>
+                            <span id="summary-difference" class="summary-value">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Botones de Acción del Modal -->
+            <div class="modal-footer">
+                <button id="modal-cancel-btn" class="btn btn-secondary">Cancelar</button>
+                <button id="modal-save-btn" class="btn btn-primary">Guardar Conteo</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Script de la aplicación -->
+    <script src="app.js"></script>
+</body>
+</html>
