@@ -4,9 +4,49 @@ let selectedItem = null;
 let currentFilter = 'all';
 let searchQuery = '';
 let fileName = 'inventario.xlsx';
+let renderLimit = 100;
+const RENDER_PAGE_SIZE = 100;
+const STORAGE_KEYS = { inventory: 'antigravity_inventory', fileName: 'antigravity_filename', counter: 'antigravity_counter' };
+
+// Nombres de columna aceptados (sin acentos, en minúsculas)
+const COLUMN_KEYS = {
+    codigo: ['codigo', 'code'],
+    alterno: ['alterno', 'alternativo', 'alternate'],
+    nombre: ['nombre', 'articulo', 'name', 'desc', 'descripcion'],
+    bodega: ['bodega', 'almacen', 'warehouse'],
+    costo: ['costo', 'cost', 'precio', 'price', 'valor', 'value'],
+    existencia: ['existencia', 'existencias', 'stock', 'cant', 'cantidad', 'qty'],
+    contado: ['contado', 'conteo', 'counted']
+};
+
+// Escapa texto antes de insertarlo como HTML (evita inyección desde el Excel)
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function normalizeKey(key) {
+    return String(key).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+function debounce(fn, ms) {
+    let timer;
+    return function (...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), ms);
+    };
+}
 
 // Elementos del DOM
 const DOM = {
+    selectFileBtn: document.getElementById('select-file-btn'),
+    showMoreBtn: document.getElementById('show-more-btn'),
+    showMoreWrapper: document.getElementById('show-more-wrapper'),
+    listNote: document.getElementById('list-note'),
     uploadView: document.getElementById('upload-view'),
     dashboardView: document.getElementById('dashboard-view'),
     excelFileInput: document.getElementById('excel-file-input'),
@@ -70,6 +110,14 @@ const DOM = {
 function init() {
     setupEventListeners();
     loadFromLocalStorage();
+    registerServiceWorker();
+}
+
+// Permite usar la app sin conexión
+function registerServiceWorker() {
+    if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+        navigator.serviceWorker.register('sw.js').catch(err => console.warn('Service worker no registrado:', err));
+    }
 }
 
 // Escuchar eventos de la UI
@@ -82,19 +130,45 @@ function setupEventListeners() {
     DOM.downloadTemplateBtn.addEventListener('click', downloadTemplate);
 
     // Búsqueda
-    DOM.searchInput.addEventListener('input', handleSearch);
+    DOM.selectFileBtn.addEventListener('click', () => DOM.excelFileInput.click());
+    DOM.searchInput.addEventListener('input', debounce(handleSearch, 200));
     DOM.clearSearchBtn.addEventListener('click', clearSearch);
+    DOM.showMoreBtn.addEventListener('click', () => {
+        renderLimit += RENDER_PAGE_SIZE;
+        renderList();
+    });
     
-    // Al presionar Enter en búsqueda: Si hay coincidencia exacta de código, abre el modal
+    // Al presionar Enter en búsqueda: si hay una única coincidencia exacta de código, abre el modal.
+    // Si el código existe en varias bodegas, deja la lista filtrada para elegir.
     DOM.searchInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter') {
+            handleSearch(); // aplicar de inmediato (sin esperar el debounce)
             const query = DOM.searchInput.value.trim().toLowerCase();
             if (query) {
-                // Buscar coincidencia exacta por código
-                const match = inventory.find(item => String(item.codigo).trim().toLowerCase() === query);
-                if (match) {
-                    openCountingModal(match);
+                const matches = inventory.filter(item => String(item.codigo).trim().toLowerCase() === query);
+                if (matches.length === 1) {
+                    openCountingModal(matches[0]);
                 }
+            }
+        }
+    });
+
+    // Modal: Escape cierra, Tab queda dentro del modal
+    document.addEventListener('keydown', function(e) {
+        if (!DOM.countingModal.classList.contains('active')) return;
+        if (e.key === 'Escape') {
+            closeCountingModal();
+        } else if (e.key === 'Tab') {
+            const focusables = DOM.countingModal.querySelectorAll('button:not([disabled]), input:not([disabled])');
+            if (focusables.length === 0) return;
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
             }
         }
     });
@@ -106,6 +180,7 @@ function setupEventListeners() {
             const clickedTab = e.currentTarget;
             clickedTab.classList.add('active');
             currentFilter = clickedTab.dataset.filter;
+            renderLimit = RENDER_PAGE_SIZE;
             renderList();
         });
     });
@@ -225,11 +300,34 @@ function processFile(file) {
                 throw new Error("La hoja de cálculo está vacía.");
             }
             
+            // Verificar que el archivo tenga las columnas necesarias
+            const foundColumns = new Set();
+            Object.keys(jsonData[0]).forEach(header => {
+                const clean = normalizeKey(header);
+                Object.keys(COLUMN_KEYS).forEach(field => {
+                    if (COLUMN_KEYS[field].includes(clean)) foundColumns.add(field);
+                });
+            });
+            if (!foundColumns.has('codigo') || !foundColumns.has('existencia')) {
+                const missing = ['codigo', 'existencia'].filter(f => !foundColumns.has(f));
+                throw new Error(`Faltan columnas obligatorias: ${missing.join(', ')}.\nColumnas encontradas: ${Object.keys(jsonData[0]).join(', ') || 'ninguna'}.\nDescargue la plantilla para ver el formato esperado.`);
+            }
+            const optionalMissing = ['nombre', 'bodega', 'costo'].filter(f => !foundColumns.has(f));
+            
             // Procesar y normalizar columnas
+            const previousInventory = inventory;
             inventory = mapExcelData(jsonData);
+            if (inventory.length === 0) {
+                inventory = previousInventory;
+                throw new Error("No se encontraron filas con código o nombre.");
+            }
+            renderLimit = RENDER_PAGE_SIZE;
             
             // Guardar en LocalStorage y cambiar de vista
             saveToLocalStorage();
+            if (optionalMissing.length > 0) {
+                alert(`Archivo cargado. No se encontraron estas columnas y se dejaron vacías o en 0: ${optionalMissing.join(', ')}.`);
+            }
             showDashboard();
             
         } catch (err) {
@@ -255,11 +353,7 @@ function mapExcelData(data) {
         // Helper para buscar columnas de forma insensible a mayúsculas/minúsculas y acentos
         const getValueByPossibleKeys = (keys) => {
             for (let key in row) {
-                const cleanKey = key.toLowerCase()
-                                    .normalize("NFD")
-                                    .replace(/[\u0300-\u036f]/g, "") // quitar acentos
-                                    .trim();
-                if (keys.includes(cleanKey)) {
+                if (keys.includes(normalizeKey(key))) {
                     return row[key];
                 }
             }
@@ -267,21 +361,21 @@ function mapExcelData(data) {
         };
 
         item.id = index;
-        item.codigo = String(getValueByPossibleKeys(['codigo', 'code'])).trim();
-        item.alterno = String(getValueByPossibleKeys(['alterno', 'alternativo', 'alternate'])).trim();
-        item.nombre = String(getValueByPossibleKeys(['nombre', 'articulo', 'articulo', 'name', 'desc', 'descripcion', 'descripcion'])).trim();
-        item.bodega = String(getValueByPossibleKeys(['bodega', 'almacen', 'almacen', 'warehouse'])).trim();
+        item.codigo = String(getValueByPossibleKeys(COLUMN_KEYS.codigo)).trim();
+        item.alterno = String(getValueByPossibleKeys(COLUMN_KEYS.alterno)).trim();
+        item.nombre = String(getValueByPossibleKeys(COLUMN_KEYS.nombre)).trim();
+        item.bodega = String(getValueByPossibleKeys(COLUMN_KEYS.bodega)).trim();
         
         // Costo (numérico)
-        const costVal = getValueByPossibleKeys(['costo', 'cost', 'precio', 'price', 'valor', 'value']);
+        const costVal = getValueByPossibleKeys(COLUMN_KEYS.costo);
         item.costo = isNaN(parseFloat(costVal)) ? 0 : parseFloat(costVal);
 
         // Existencia (numérica)
-        const existVal = getValueByPossibleKeys(['existencia', 'existencias', 'stock', 'cant', 'cantidad', 'qty']);
+        const existVal = getValueByPossibleKeys(COLUMN_KEYS.existencia);
         item.existencia = isNaN(parseFloat(existVal)) ? 0 : parseFloat(existVal);
         
         // Contado (ver si ya tiene conteos previos cargados)
-        const countedVal = getValueByPossibleKeys(['contado', 'conteo', 'counted']);
+        const countedVal = getValueByPossibleKeys(COLUMN_KEYS.contado);
         if (countedVal !== "" && !isNaN(parseFloat(countedVal))) {
             item.contado = parseFloat(countedVal);
             item.partialCounts = [{ id: Date.now(), qty: item.contado, desc: 'Cargado de Excel' }];
@@ -300,19 +394,29 @@ function mapExcelData(data) {
 // ----------------------------------------------------
 // 3. PERSISTENCIA DE DATOS (LOCALSTORAGE)
 // ----------------------------------------------------
+let storageWarningShown = false;
+
 function saveToLocalStorage() {
     try {
-        localStorage.setItem('antigravity_inventory', JSON.stringify(inventory));
-        localStorage.setItem('antigravity_filename', fileName);
+        localStorage.setItem(STORAGE_KEYS.inventory, JSON.stringify(inventory));
+        localStorage.setItem(STORAGE_KEYS.fileName, fileName);
         setStatus('saved', 'Guardado en Navegador');
+        storageWarningShown = false;
+        return true;
     } catch (e) {
         console.error("No se pudo guardar en LocalStorage (tal vez excedió cuota):", e);
+        setStatus('error', 'ERROR: no se guardó');
+        if (!storageWarningShown) {
+            storageWarningShown = true;
+            alert("No se pudo guardar el conteo en el navegador (almacenamiento lleno o bloqueado).\nDescargue el Excel ahora para no perder el avance.");
+        }
+        return false;
     }
 }
 
 function loadFromLocalStorage() {
-    const savedInventory = localStorage.getItem('antigravity_inventory');
-    const savedFileName = localStorage.getItem('antigravity_filename');
+    const savedInventory = localStorage.getItem(STORAGE_KEYS.inventory);
+    const savedFileName = localStorage.getItem(STORAGE_KEYS.fileName);
     
     if (savedInventory) {
         try {
@@ -321,7 +425,8 @@ function loadFromLocalStorage() {
             showDashboard();
         } catch (e) {
             console.error("Error al leer de LocalStorage:", e);
-            localStorage.clear();
+            localStorage.removeItem(STORAGE_KEYS.inventory);
+            localStorage.removeItem(STORAGE_KEYS.fileName);
             showUploadView();
         }
     } else {
@@ -384,6 +489,7 @@ function updateStats() {
 // ----------------------------------------------------
 function handleSearch() {
     searchQuery = DOM.searchInput.value.trim().toLowerCase();
+    renderLimit = RENDER_PAGE_SIZE;
     
     // Mostrar/ocultar botón para limpiar búsqueda
     if (searchQuery) {
@@ -398,6 +504,7 @@ function handleSearch() {
 function clearSearch() {
     DOM.searchInput.value = '';
     searchQuery = '';
+    renderLimit = RENDER_PAGE_SIZE;
     DOM.clearSearchBtn.style.display = 'none';
     DOM.searchInput.focus();
     renderList();
@@ -428,6 +535,8 @@ function renderList() {
     });
     
     // Mostrar estado vacío si no hay resultados
+    DOM.showMoreWrapper.style.display = 'none';
+    DOM.listNote.style.display = 'none';
     if (filteredItems.length === 0) {
         DOM.emptyResultsState.style.display = 'flex';
         return;
@@ -435,8 +544,16 @@ function renderList() {
         DOM.emptyResultsState.style.display = 'none';
     }
     
-    // 2. Renderizar filas y tarjetas
-    filteredItems.forEach(item => {
+    // 2. Renderizar solo una parte (rendimiento con catálogos grandes)
+    const visibleItems = filteredItems.slice(0, renderLimit);
+    if (filteredItems.length > visibleItems.length) {
+        DOM.listNote.textContent = `Mostrando ${visibleItems.length} de ${filteredItems.length} artículos`;
+        DOM.listNote.style.display = 'block';
+        DOM.showMoreWrapper.style.display = 'flex';
+    }
+    
+    // 3. Renderizar filas y tarjetas
+    visibleItems.forEach(item => {
         // Renderizado para tabla (PC)
         const tr = createTableRow(item);
         DOM.itemsTableBody.appendChild(tr);
@@ -478,16 +595,16 @@ function createTableRow(item) {
     }
     
     tr.innerHTML = `
-        <td><strong>${item.codigo}</strong></td>
-        <td>${item.alterno || '<span class="val-muted">-</span>'}</td>
-        <td>${item.nombre}</td>
-        <td><span class="card-wh-badge">${item.bodega || 'N/D'}</span></td>
+        <td><strong>${escapeHtml(item.codigo)}</strong></td>
+        <td>${item.alterno ? escapeHtml(item.alterno) : '<span class="val-muted">-</span>'}</td>
+        <td>${escapeHtml(item.nombre)}</td>
+        <td><span class="card-wh-badge">${escapeHtml(item.bodega || 'N/D')}</span></td>
         <td class="num-col">$${item.costo.toFixed(2)}</td>
         <td class="num-col"><strong>${item.existencia}</strong></td>
         <td class="num-col font-weight-bold" style="font-size:1.05rem;">${contadoStr}</td>
         <td class="num-col ${diffClass}"><strong>${diffStr}</strong></td>
         <td class="action-col">
-            <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation(); openCountingModalById(${item.id})">
+            <button type="button" class="btn btn-secondary btn-sm">
                 ${item.contado !== null ? 'Editar' : 'Contar'}
             </button>
         </td>
@@ -529,8 +646,8 @@ function createTableCellCard(item) {
     card.innerHTML = `
         <div class="card-header-row">
             <div class="card-code-section">
-                <span class="card-code">${item.codigo}</span>
-                <span class="card-alt">${item.alterno ? 'Alt: ' + item.alterno : 'Sin alterno'}</span>
+                <span class="card-code">${escapeHtml(item.codigo)}</span>
+                <span class="card-alt">${item.alterno ? 'Alt: ' + escapeHtml(item.alterno) : 'Sin alterno'}</span>
             </div>
             <div>
                 ${item.contado !== null ? 
@@ -541,9 +658,9 @@ function createTableCellCard(item) {
                 }
             </div>
         </div>
-        <div class="card-name">${item.nombre}</div>
+        <div class="card-name">${escapeHtml(item.nombre)}</div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-            <span class="card-wh-badge">${item.bodega || 'Bodega: N/D'}</span>
+            <span class="card-wh-badge">${escapeHtml(item.bodega || 'Bodega: N/D')}</span>
             <span class="card-wh-badge" style="background-color: rgba(59, 130, 246, 0.05); color: var(--primary); border-color: rgba(59, 130, 246, 0.15);">Costo: $${item.costo.toFixed(2)}</span>
         </div>
         <div class="card-stocks-row">
@@ -567,11 +684,6 @@ function createTableCellCard(item) {
     return card;
 }
 
-// Helper para abrir el modal desde un onclick en código inline
-window.openCountingModalById = function(id) {
-    const item = inventory.find(i => i.id === id);
-    if (item) openCountingModal(item);
-};
 
 // ----------------------------------------------------
 // 7. LÓGICA DEL MODAL DE CONTEO Y HISTORIAL
@@ -652,11 +764,51 @@ function safeEvaluate(str) {
         return NaN;
     }
     
+    // Analizador recursivo propio (sin eval ni new Function)
+    let pos = 0;
+    const fail = () => { throw new Error('expresion invalida'); };
+
+    function parseNumber() {
+        const m = /^\d*\.?\d+|^\d+\.?/.exec(str.slice(pos));
+        if (!m) fail();
+        pos += m[0].length;
+        return parseFloat(m[0]);
+    }
+    function parseFactor() {
+        if (str[pos] === '-') { pos++; return -parseFactor(); }
+        if (str[pos] === '+') { pos++; return parseFactor(); }
+        if (str[pos] === '(') {
+            pos++;
+            const v = parseExpr();
+            if (str[pos] !== ')') fail();
+            pos++;
+            return v;
+        }
+        return parseNumber();
+    }
+    function parseTerm() {
+        let v = parseFactor();
+        while (str[pos] === '*' || str[pos] === '/') {
+            const op = str[pos++];
+            const r = parseFactor();
+            v = op === '*' ? v * r : v / r;
+        }
+        return v;
+    }
+    function parseExpr() {
+        let v = parseTerm();
+        while (str[pos] === '+' || str[pos] === '-') {
+            const op = str[pos++];
+            const r = parseTerm();
+            v = op === '+' ? v + r : v - r;
+        }
+        return v;
+    }
+
     try {
-        // Como hemos restringido estrictamente los caracteres a matemáticas básicas,
-        // evaluar con un constructor Function es seguro y robusto en este contexto de navegador.
-        const val = new Function(`return (${str})`)();
-        return typeof val === 'number' && !isNaN(val) ? val : NaN;
+        const val = parseExpr();
+        if (pos !== str.length) fail();
+        return Number.isFinite(val) ? Math.round(val * 1e6) / 1e6 : NaN;
     } catch (e) {
         return NaN;
     }
@@ -676,6 +828,11 @@ function calculateModalTotal() {
             DOM.expressionPreview.style.color = 'var(--danger)';
             DOM.expressionPreview.style.display = 'block';
             exprParsed = 0;
+        } else if (exprParsed < 0) {
+            DOM.expressionPreview.textContent = `= ${exprParsed} (no puede ser negativo)`;
+            DOM.expressionPreview.style.color = 'var(--danger)';
+            DOM.expressionPreview.style.display = 'block';
+            exprParsed = 0;
         } else {
             DOM.expressionPreview.textContent = `= ${exprParsed}`;
             DOM.expressionPreview.style.color = 'var(--success)';
@@ -683,7 +840,7 @@ function calculateModalTotal() {
         }
     } else {
         DOM.expressionPreview.style.display = 'none';
-        if (isNaN(exprParsed)) exprParsed = 0;
+        if (isNaN(exprParsed) || exprParsed < 0) exprParsed = 0;
     }
     
     // Sumar con el historial de parciales
@@ -780,24 +937,45 @@ function renderPartialList() {
         li.className = 'partial-item';
         li.innerHTML = `
             <div>
-                <span class="partial-item-val">${p.qty}</span>
-                <span class="partial-item-desc">${p.desc}</span>
+                <span class="partial-item-val">${escapeHtml(p.qty)}</span>
+                <span class="partial-item-desc">${escapeHtml(p.desc)}</span>
             </div>
-            <button class="btn-delete-partial" onclick="event.stopPropagation(); deletePartialCountById(${p.id})">&times;</button>
+            <button type="button" class="btn-delete-partial" aria-label="Eliminar parcial">&times;</button>
         `;
+        li.querySelector('.btn-delete-partial').addEventListener('click', (e) => {
+            e.stopPropagation();
+            deletePartialCount(p.id);
+        });
         DOM.partialList.appendChild(li);
     });
 }
 
-// Helper global para invocar la eliminación desde el onclick del HTML
-window.deletePartialCountById = function(id) {
-    deletePartialCount(id);
-};
+
+// Nombre de quien cuenta: se pregunta una vez y se recuerda en este dispositivo
+function getCounterName() {
+    let name = localStorage.getItem(STORAGE_KEYS.counter);
+    if (name === null) {
+        name = (prompt('¿Quién realiza el conteo? (nombre, opcional)') || '').trim();
+        try { localStorage.setItem(STORAGE_KEYS.counter, name); } catch (e) { /* ignorar */ }
+    }
+    return name;
+}
 
 // Guarda los datos del clon en el arreglo principal de inventario
 function saveCount() {
     if (!selectedItem) return;
     
+    // No guardar si la expresión escrita es inválida o negativa
+    const rawExpr = DOM.countExpression.value.trim();
+    if (rawExpr !== '') {
+        const parsed = safeEvaluate(rawExpr);
+        if (isNaN(parsed) || parsed < 0) {
+            alert('La cantidad escrita no es válida. Corríjala antes de guardar.');
+            DOM.countExpression.focus();
+            return;
+        }
+    }
+
     // Si el usuario tiene una expresión incompleta o no procesada en el input principal,
     // se sumará antes de guardar.
     calculateModalTotal();
@@ -816,10 +994,14 @@ function saveCount() {
             inventory[realIndex].contado = null;
             inventory[realIndex].diferencias = null;
             inventory[realIndex].partialCounts = [];
+            inventory[realIndex].fechaConteo = null;
+            inventory[realIndex].contador = null;
         } else {
             inventory[realIndex].contado = selectedItem.contado;
             inventory[realIndex].diferencias = selectedItem.diferencias;
             inventory[realIndex].partialCounts = selectedItem.partialCounts;
+            inventory[realIndex].fechaConteo = new Date().toISOString();
+            inventory[realIndex].contador = getCounterName();
         }
         
         saveToLocalStorage();
@@ -834,11 +1016,16 @@ function saveCount() {
 // 8. ACCIONES: LIMPIAR, NUEVO Y PLANTILLA EXCEL
 // ----------------------------------------------------
 function confirmClearCounts() {
-    if (confirm("¿Está seguro de que desea limpiar todos los conteos registrados? Esta acción no se puede deshacer.")) {
+    if (confirm("¿Está seguro de que desea limpiar todos los conteos registrados?\n\nSe descargará una copia de respaldo en Excel antes de borrar.")) {
+        if (inventory.some(item => item.contado !== null)) {
+            downloadResults('respaldo_antes_de_limpiar');
+        }
         inventory.forEach(item => {
             item.contado = null;
             item.diferencias = null;
             item.partialCounts = [];
+            item.fechaConteo = null;
+            item.contador = null;
         });
         saveToLocalStorage();
         updateStats();
@@ -847,9 +1034,12 @@ function confirmClearCounts() {
 }
 
 function confirmLoadNewFile() {
-    if (confirm("¿Desea cargar un nuevo archivo? Asegúrese de haber descargado los resultados actuales antes de continuar.")) {
-        localStorage.removeItem('antigravity_inventory');
-        localStorage.removeItem('antigravity_filename');
+    if (confirm("¿Desea cargar un nuevo archivo?\n\nSe descargará una copia de respaldo en Excel del avance actual antes de continuar.")) {
+        if (inventory.some(item => item.contado !== null)) {
+            downloadResults('respaldo_antes_de_cargar_nuevo');
+        }
+        localStorage.removeItem(STORAGE_KEYS.inventory);
+        localStorage.removeItem(STORAGE_KEYS.fileName);
         inventory = [];
         fileName = 'inventario.xlsx';
         DOM.excelFileInput.value = '';
@@ -904,7 +1094,8 @@ function downloadTemplate() {
 }
 
 // Exporta el inventario con los conteos y diferencias a un nuevo Excel
-function downloadResults() {
+function downloadResults(filePrefix) {
+    if (typeof filePrefix !== 'string') filePrefix = 'conteo_inventario'; // al usarse como handler de click llega un evento
     if (inventory.length === 0) {
         alert("No hay datos para descargar.");
         return;
@@ -919,7 +1110,10 @@ function downloadResults() {
         "costo": item.costo,
         "existencia": item.existencia,
         "contado": item.contado !== null ? item.contado : "",
-        "diferencias": item.diferencias !== null ? item.diferencias : ""
+        "diferencias": item.diferencias !== null ? item.diferencias : "",
+        "detalle_parciales": (item.partialCounts || []).map(p => `${p.qty} (${p.desc})`).join('; '),
+        "contador": item.contador || "",
+        "fecha_conteo": item.fechaConteo ? new Date(item.fechaConteo).toLocaleString('es') : ""
     }));
 
     const worksheet = XLSX.utils.json_to_sheet(exportData);
@@ -935,14 +1129,17 @@ function downloadResults() {
         { wch: 10 }, // costo
         { wch: 12 }, // existencia
         { wch: 12 }, // contado
-        { wch: 12 }  // diferencias
+        { wch: 12 }, // diferencias
+        { wch: 40 }, // detalle_parciales
+        { wch: 16 }, // contador
+        { wch: 20 }  // fecha_conteo
     ];
 
     // Obtener fecha actual para el nombre del archivo
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10);
     const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
-    const finalFileName = `conteo_inventario_${dateStr}_${timeStr}.xlsx`;
+    const finalFileName = `${filePrefix}_${dateStr}_${timeStr}.xlsx`;
 
     XLSX.writeFile(workbook, finalFileName);
     

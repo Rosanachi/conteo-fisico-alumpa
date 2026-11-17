@@ -1,0 +1,13 @@
+{
+  "name": "Inventario Físico",
+  "short_name": "Inventario",
+  "description": "Conteo físico de inventario con soporte sin conexión",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0e17",
+  "theme_color": "#0a0e17",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
