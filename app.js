@@ -147,6 +147,7 @@ const DOM = {
     // Botones Principales
     downloadTemplateBtn: document.getElementById('download-template-btn'),
     downloadResultsBtn: document.getElementById('download-results-btn'),
+    shareWhatsappBtn: document.getElementById('share-whatsapp-btn'),
     clearCountsBtn: document.getElementById('clear-counts-btn'),
     loadNewFileBtn: document.getElementById('load-new-file-btn'),
     
@@ -267,6 +268,7 @@ function setupEventListeners() {
 
     // Botones de acción principales
     DOM.downloadResultsBtn.addEventListener('click', downloadResults);
+    DOM.shareWhatsappBtn.addEventListener('click', shareResultsWhatsApp);
     DOM.clearCountsBtn.addEventListener('click', confirmClearCounts);
     DOM.loadNewFileBtn.addEventListener('click', confirmLoadNewFile);
 
@@ -1194,12 +1196,7 @@ function downloadTemplate() {
 }
 
 // Exporta el inventario con los conteos y diferencias a un nuevo Excel
-function downloadResults(filePrefix) {
-    if (typeof filePrefix !== 'string') filePrefix = 'conteo_inventario'; // al usarse como handler de click llega un evento
-    if (inventory.length === 0) {
-        alert("No hay datos para descargar.");
-        return;
-    }
+function buildResultsWorkbook(filePrefix) {
     
     // Estructurar los datos exactos que requiere el usuario
     const exportData = inventory.map(item => ({
@@ -1241,9 +1238,52 @@ function downloadResults(filePrefix) {
     const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
     const finalFileName = `${filePrefix}_${dateStr}_${timeStr}.xlsx`;
 
+    return { workbook, finalFileName };
+}
+
+// Descarga el Excel con los conteos
+function downloadResults(filePrefix) {
+    if (typeof filePrefix !== 'string') filePrefix = 'conteo_inventario'; // al usarse como handler de click llega un evento
+    if (inventory.length === 0) {
+        alert("No hay datos para descargar.");
+        return;
+    }
+    const { workbook, finalFileName } = buildResultsWorkbook(filePrefix);
     XLSX.writeFile(workbook, finalFileName);
-    
     setStatus('saved', 'Resultados Descargados');
+}
+
+// Envía el Excel por WhatsApp. En el móvil abre el menú de compartir (WhatsApp aparece en la lista),
+// porque WhatsApp no permite adjuntar un archivo desde un enlace: el archivo debe compartirse.
+async function shareResultsWhatsApp() {
+    if (inventory.length === 0) {
+        alert('No hay datos para enviar.');
+        return;
+    }
+    const { workbook, finalFileName } = buildResultsWorkbook('conteo_inventario');
+    const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const file = new File([bytes], finalFileName, { type: mime });
+    const text = 'Conteo físico: ' + fileName;
+
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+            await navigator.share({ files: [file], title: finalFileName, text });
+            setStatus('saved', 'Archivo compartido');
+        } catch (e) {
+            if (e.name !== 'AbortError') {
+                console.error('No se pudo compartir:', e);
+                alert('No se pudo abrir el menú de compartir. Se descargará el archivo.');
+                XLSX.writeFile(workbook, finalFileName);
+            }
+        }
+        return;
+    }
+
+    // Navegador sin compartir archivos (p. ej. PC): descarga el Excel y abre WhatsApp para adjuntarlo
+    XLSX.writeFile(workbook, finalFileName);
+    alert('Este dispositivo no permite compartir archivos directamente.\nSe descargó el Excel; se abrirá WhatsApp para que lo adjunte.');
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
 }
 
 // ----------------------------------------------------
