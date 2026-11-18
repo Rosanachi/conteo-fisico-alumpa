@@ -29,8 +29,77 @@ function escapeHtml(value) {
         .replace(/'/g, '&#39;');
 }
 
+// Redondea a 2 decimales (evita 0.30000000000000004 y que 0.1+0.2-0.3 no sea 0)
+function round2(n) {
+    return Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+}
+
 function normalizeKey(key) {
     return String(key).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+// ----------------------------------------------------
+// IMÁGENES DEL CATÁLOGO (regla: primeros 4 de Alterno = últimos 4 dígitos del código AL-xxxx, rellenado con ceros)
+// ----------------------------------------------------
+const CATALOG = { index: null, base: 'catalog/' };
+
+function catalogKeyFromAlterno(alterno) {
+    const k = String(alterno ?? '').trim().slice(0, 4);
+    return /^\d{4}$/.test(k) ? k : null;
+}
+
+// Devuelve { state: 'matched'|'ambiguous'|'none', key4, code, cands }
+function matchImagen(alterno) {
+    const key4 = catalogKeyFromAlterno(alterno);
+    if (!key4) return { state: 'none', key4: null, code: null, cands: [] };
+    const codes = [...new Set((CATALOG.index?.[key4] || []).map(e => e.code))];
+    if (codes.length === 0) return { state: 'none', key4, code: null, cands: [] };
+    if (codes.length === 1) return { state: 'matched', key4, code: codes[0], cands: [] };
+    return { state: 'ambiguous', key4, code: null, cands: codes };
+}
+
+// Hook de creación: asigna imagen automática a un artículo nuevo (no pisa una elección manual)
+function asignarImagenAutomatica(item) {
+    if (item.imgState === 'manual') return item;
+    const m = matchImagen(item.alterno);
+    item.imgKey = m.key4;
+    item.imgCode = m.code;
+    item.imgState = m.state;
+    return item;
+}
+
+// URL de la imagen del artículo o null (sin match, ambiguo o índice no cargado)
+function imageUrlFor(item) {
+    let code = item.imgCode;
+    let key4 = item.imgKey;
+    if (item.imgState !== 'manual' && !code) {   // artículos guardados antes de esta función, o índice cargado después
+        const m = matchImagen(item.alterno);
+        code = m.code; key4 = m.key4;
+    }
+    if (!code || !key4) return null;
+    const e = (CATALOG.index?.[key4] || []).find(x => x.code === code);
+    return e ? CATALOG.base + e.file : null;
+}
+
+function thumbHtml(item, cls) {
+    const url = imageUrlFor(item);
+    if (!url) return `<span class="${cls} thumb-empty" title="Sin imagen en catálogo"></span>`;
+    return `<img class="${cls}" src="${escapeHtml(url)}" loading="lazy" decoding="async" alt="">`;
+}
+
+async function loadCatalogIndex() {
+    try {
+        const r = await fetch(CATALOG.base + 'index.json');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        CATALOG.index = (await r.json()).items || {};
+    } catch (e) {
+        console.warn('Catálogo de imágenes no disponible:', e);
+        CATALOG.index = {};
+        return;
+    }
+    // Reasigna los artículos ya cargados (excepto los manuales)
+    inventory.forEach(asignarImagenAutomatica);
+    if (inventory.length && typeof renderList === 'function') renderList();
 }
 
 function debounce(fn, ms) {
@@ -86,6 +155,7 @@ const DOM = {
     modalCloseX: document.getElementById('modal-close-x'),
     modalCancelBtn: document.getElementById('modal-cancel-btn'),
     modalSaveBtn: document.getElementById('modal-save-btn'),
+    modalArticleImg: document.getElementById('modal-article-img'),
     modalArticleName: document.getElementById('modal-article-name'),
     modalArticleCode: document.getElementById('modal-article-code'),
     modalArticleAlt: document.getElementById('modal-article-alt'),
@@ -111,6 +181,16 @@ function init() {
     setupEventListeners();
     loadFromLocalStorage();
     registerServiceWorker();
+    loadCatalogIndex();
+    // Si una imagen falla (sin conexión o archivo ausente) se muestra el recuadro vacío
+    document.addEventListener('error', (e) => {
+        const t = e.target;
+        if (t && t.id === 'modal-article-img') { t.hidden = true; return; }
+        if (t && t.tagName === 'IMG' && t.classList.contains('thumb-img')) {
+            t.removeAttribute('src');
+            t.classList.add('thumb-empty');
+        }
+    }, true);
 }
 
 // Permite usar la app sin conexión
@@ -385,7 +465,10 @@ function mapExcelData(data) {
         }
         
         // Diferencia
-        item.diferencias = item.contado !== null ? (item.contado - item.existencia) : null;
+        item.diferencias = item.contado !== null ? round2(item.contado - item.existencia) : null;
+        
+        // Imagen del catálogo (si el índice aún no cargó, se reasigna al cargarlo)
+        asignarImagenAutomatica(item);
         
         return item;
     }).filter(item => item.codigo !== "" || item.nombre !== ""); // Filtrar filas vacías
@@ -421,6 +504,11 @@ function loadFromLocalStorage() {
     if (savedInventory) {
         try {
             inventory = JSON.parse(savedInventory);
+            // Corrige conteos guardados antes con demasiados decimales
+            inventory.forEach(it => {
+                if (typeof it.contado === 'number') it.contado = round2(it.contado);
+                if (typeof it.diferencias === 'number') it.diferencias = round2(it.diferencias);
+            });
             fileName = savedFileName || 'inventario.xlsx';
             showDashboard();
         } catch (e) {
@@ -595,6 +683,7 @@ function createTableRow(item) {
     }
     
     tr.innerHTML = `
+        <td class="thumb-col">${thumbHtml(item, 'thumb thumb-img')}</td>
         <td><strong>${escapeHtml(item.codigo)}</strong></td>
         <td>${item.alterno ? escapeHtml(item.alterno) : '<span class="val-muted">-</span>'}</td>
         <td>${escapeHtml(item.nombre)}</td>
@@ -658,7 +747,10 @@ function createTableCellCard(item) {
                 }
             </div>
         </div>
-        <div class="card-name">${escapeHtml(item.nombre)}</div>
+        <div class="card-name-row">
+            ${thumbHtml(item, 'thumb thumb-img')}
+            <div class="card-name">${escapeHtml(item.nombre)}</div>
+        </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
             <span class="card-wh-badge">${escapeHtml(item.bodega || 'Bodega: N/D')}</span>
             <span class="card-wh-badge" style="background-color: rgba(59, 130, 246, 0.05); color: var(--primary); border-color: rgba(59, 130, 246, 0.15);">Costo: $${item.costo.toFixed(2)}</span>
@@ -699,6 +791,14 @@ function openCountingModal(item) {
     DOM.modalArticleWh.textContent = selectedItem.bodega || 'N/D';
     DOM.modalArticleCost.textContent = `$${selectedItem.costo.toFixed(2)}`;
     DOM.modalArticleExist.textContent = selectedItem.existencia;
+    const modalImgUrl = imageUrlFor(selectedItem);
+    if (modalImgUrl) {
+        DOM.modalArticleImg.src = modalImgUrl;
+        DOM.modalArticleImg.hidden = false;
+    } else {
+        DOM.modalArticleImg.removeAttribute('src');
+        DOM.modalArticleImg.hidden = true;
+    }
     
     // Inicializar campo de expresión (fórmula / número directo)
     DOM.countExpression.value = '';
@@ -845,11 +945,11 @@ function calculateModalTotal() {
     
     // Sumar con el historial de parciales
     const partialsSum = (selectedItem.partialCounts || []).reduce((acc, p) => acc + p.qty, 0);
-    const totalCounted = exprParsed + partialsSum;
+    const totalCounted = round2(exprParsed + partialsSum);
     
     // Guardar conteo momentáneo en el clon
     selectedItem.contado = totalCounted;
-    selectedItem.diferencias = selectedItem.contado - selectedItem.existencia;
+    selectedItem.diferencias = round2(selectedItem.contado - selectedItem.existencia);
     
     // Actualizar UI del modal
     DOM.summaryTotalCounted.textContent = selectedItem.contado;
