@@ -1,6 +1,6 @@
 // Service worker: guarda la app en caché para que abra sin conexión.
 // Cambie CACHE_VERSION cada vez que publique cambios en los archivos.
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const CACHE_NAME = `inventario-${CACHE_VERSION}`;
 // Caché aparte para las imágenes del catálogo (cache-first, se llena bajo demanda; no se borra al cambiar de versión)
 const IMG_CACHE = 'inventario-img-v1';
@@ -29,6 +29,8 @@ self.addEventListener('fetch', (event) => {
     const req = event.request;
     if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
     const path = new URL(req.url).pathname;
+    // Las respuestas de la API (sesión, conteos) nunca se guardan en caché: son por usuario y deben ser actuales
+    if (path.startsWith('/api/')) return;
     if (/\/catalog\/img\//.test(path)) {
         event.respondWith(caches.open(IMG_CACHE).then((cache) => cache.match(req).then((hit) => hit || fetch(req).then((res) => {
             if (res.ok) {

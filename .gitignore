@@ -1,2 +1,6 @@
 datos/
 
+node_modules/
+.env
+.env.*
+prompt*.docx
