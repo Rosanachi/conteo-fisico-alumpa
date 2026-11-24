@@ -156,11 +156,6 @@ const DOM = {
     countExpression: document.getElementById('count-expression'),
     expressionPreview: document.getElementById('expression-preview'),
     quickAdjustButtons: document.querySelectorAll('.btn-adjust'),
-    partialQty: document.getElementById('partial-qty'),
-    partialDesc: document.getElementById('partial-desc'),
-    addPartialBtn: document.getElementById('add-partial-btn'),
-    partialList: document.getElementById('partial-list'),
-    partialEmpty: document.getElementById('partial-empty'),
     summaryTotalCounted: document.getElementById('summary-total-counted')
 };
 
@@ -269,21 +264,6 @@ function setupEventListeners() {
             const val = parseFloat(btn.dataset.val);
             adjustExpressionCount(val);
         });
-    });
-
-    // Conteos parciales
-    DOM.addPartialBtn.addEventListener('click', addPartialCount);
-    DOM.partialQty.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            addPartialCount();
-        }
-    });
-    DOM.partialDesc.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            addPartialCount();
-        }
     });
 
     // Teclado Numérico Virtual
@@ -726,12 +706,9 @@ function openCountingModal(item) {
         DOM.modalArticleImg.hidden = true;
     }
     
-    // Inicializar campo de expresión (fórmula / número directo)
-    DOM.countExpression.value = '';
+    // Campo de cantidad: si ya se contó, muestra lo contado para corregirlo o sumarle (ej. 7+3)
+    DOM.countExpression.value = selectedItem.contado !== null ? String(selectedItem.contado) : '';
     DOM.expressionPreview.style.display = 'none';
-    
-    // Cargar historial de parciales
-    renderPartialList();
     
     // Calcular totales del modal
     calculateModalTotal();
@@ -869,9 +846,7 @@ function calculateModalTotal() {
         if (isNaN(exprParsed) || exprParsed < 0) exprParsed = 0;
     }
     
-    // Sumar con el historial de parciales
-    const partialsSum = (selectedItem.partialCounts || []).reduce((acc, p) => acc + p.qty, 0);
-    const totalCounted = round2(exprParsed + partialsSum);
+    const totalCounted = round2(exprParsed);
     
     // Guardar conteo momentáneo en el clon
     selectedItem.contado = totalCounted;
@@ -894,76 +869,6 @@ function adjustExpressionCount(val) {
     calculateModalTotal();
     DOM.countExpression.focus();
 }
-
-// Agrega una cantidad parcial al listado acumulativo
-function addPartialCount() {
-    if (!selectedItem) return;
-    
-    const qty = parseFloat(DOM.partialQty.value);
-    const desc = DOM.partialDesc.value.trim();
-    
-    if (isNaN(qty) || qty <= 0) {
-        alert("Ingrese una cantidad válida y mayor a 0 para acumular.");
-        DOM.partialQty.focus();
-        return;
-    }
-    
-    const partial = {
-        id: Date.now(),
-        qty: qty,
-        desc: desc || `Parcial ${selectedItem.partialCounts.length + 1}`
-    };
-    
-    selectedItem.partialCounts.push(partial);
-    
-    // Limpiar inputs del formulario parcial
-    DOM.partialQty.value = '';
-    DOM.partialDesc.value = '';
-    
-    renderPartialList();
-    calculateModalTotal();
-    
-    DOM.partialQty.focus(); // mantener el foco en la cantidad para registrar otro rápido
-}
-
-function deletePartialCount(id) {
-    if (!selectedItem) return;
-    
-    selectedItem.partialCounts = selectedItem.partialCounts.filter(p => p.id !== id);
-    renderPartialList();
-    calculateModalTotal();
-}
-
-// Inyecta el historial acumulado en el modal
-function renderPartialList() {
-    DOM.partialList.innerHTML = '';
-    const partials = selectedItem.partialCounts || [];
-    
-    if (partials.length === 0) {
-        DOM.partialEmpty.style.display = 'block';
-        return;
-    }
-    
-    DOM.partialEmpty.style.display = 'none';
-    
-    partials.forEach(p => {
-        const li = document.createElement('li');
-        li.className = 'partial-item';
-        li.innerHTML = `
-            <div>
-                <span class="partial-item-val">${escapeHtml(p.qty)}</span>
-                <span class="partial-item-desc">${escapeHtml(p.desc)}</span>
-            </div>
-            <button type="button" class="btn-delete-partial" aria-label="Eliminar parcial">&times;</button>
-        `;
-        li.querySelector('.btn-delete-partial').addEventListener('click', (e) => {
-            e.stopPropagation();
-            deletePartialCount(p.id);
-        });
-        DOM.partialList.appendChild(li);
-    });
-}
-
 
 // Guarda el conteo del artículo en el servidor y, si se guardó, actualiza la lista en pantalla
 let savingCount = false;
@@ -988,11 +893,14 @@ async function saveCount() {
     const realIndex = inventory.findIndex(item => item.id === selectedItem.id);
     if (realIndex === -1) return closeCountingModal();
 
-    // Líneas a guardar: los parciales agregados + lo escrito en el campo principal (si escribió algo, incluso 0).
-    // Sin nada escrito ni parciales, el artículo queda pendiente (sin líneas).
+    // Una sola línea con lo escrito (incluso 0). Campo vacío = artículo pendiente.
     const hasInput = rawExpr !== '';
-    const lineas = selectedItem.partialCounts.map(p => ({ cantidad: p.qty, detalle: p.desc }));
-    if (hasInput) lineas.push({ cantidad: round2(safeEvaluate(rawExpr)), detalle: 'Directo' });
+    if (!hasInput && inventory[realIndex].contado !== null &&
+        !confirm('El campo de cantidad está vacío. ¿Quitar el conteo de este artículo y dejarlo pendiente?')) {
+        DOM.countExpression.focus();
+        return;
+    }
+    const lineas = hasInput ? [{ cantidad: round2(safeEvaluate(rawExpr)), detalle: 'Directo' }] : [];
 
     savingCount = true;
     DOM.modalSaveBtn.disabled = true;

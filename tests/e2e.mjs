@@ -131,6 +131,34 @@ T('contados = 1', (await texto('#stat-counted')) === '1');
 const guardado = (await pg.query("SELECT sum(cantidad)::float8 s, count(*)::int n FROM conteo_lineas")).rows[0];
 T('en la base quedó 7 (3+4) en 1 línea', guardado.s === 7 && guardado.n === 1, JSON.stringify(guardado));
 
+// Modal simplificado: sin "Acumular conteos parciales"; al reabrir muestra lo contado para corregir o sumar
+T('el modal ya no tiene cantidad/ubicación/Agregar', (await pg1.$('#partial-qty')) === null && (await pg1.$('#add-partial-btn')) === null && (await pg1.$('.accumulative-section')) === null);
+await pg1.click('#items-table-body tr');
+await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
+T('al reabrir, el campo muestra lo contado (7)', (await pg1.$eval('#count-expression', e => e.value)) === '7');
+await pg1.$eval('#count-expression', e => { e.value = ''; });
+await pg1.type('#count-expression', '7+3');
+await pg1.click('#modal-save-btn');
+await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
+const corregido = (await pg.query('SELECT sum(cantidad)::float8 s, count(*)::int n FROM conteo_lineas')).rows[0];
+T('corregir a 7+3 guarda 10 en una sola línea', corregido.s === 10 && corregido.n === 1, JSON.stringify(corregido));
+await pg1.click('#items-table-body tr');
+await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
+await pg1.$eval('#count-expression', e => { e.value = ''; e.dispatchEvent(new Event('input')); });
+const antes = dialogos.length;
+pg1.removeAllListeners('dialog');
+pg1.on('dialog', async d => { dialogos.push(d.message()); await d.dismiss(); });
+await pg1.click('#modal-save-btn');
+await new Promise(r => setTimeout(r, 500));
+T('vaciar el campo pide confirmación y al cancelar no borra', dialogos.length === antes + 1 && /pendiente/.test(dialogos.at(-1)) &&
+  (await pg.query('SELECT count(*)::int n FROM conteo_lineas')).rows[0].n === 1 && await pg1.$eval('#counting-modal', m => m.classList.contains('active')));
+pg1.removeAllListeners('dialog');
+pg1.on('dialog', async d => { dialogos.push(d.message()); await d.accept(); });
+await pg1.type('#count-expression', '7');
+await pg1.click('#modal-save-btn');
+await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
+T('se restablece a 7 para el resto de la prueba', (await pg.query('SELECT sum(cantidad)::float8 s FROM conteo_lineas')).rows[0].s === 7);
+
 // Recargar: el conteo abierto se retoma
 await pg1.reload({ waitUntil: 'networkidle0' });
 T('al recargar se retoma el conteo abierto', await esperar(() => document.getElementById('dashboard-view').classList.contains('active-view') && document.querySelectorAll('#items-table-body tr').length > 0));
