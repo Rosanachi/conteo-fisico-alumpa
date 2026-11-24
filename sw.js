@@ -1,12 +1,12 @@
 // Service worker: guarda la app en caché para que abra sin conexión.
 // Cambie CACHE_VERSION cada vez que publique cambios en los archivos.
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const CACHE_NAME = `inventario-${CACHE_VERSION}`;
 // Caché aparte para las imágenes del catálogo (cache-first, se llena bajo demanda; no se borra al cambiar de versión)
 const IMG_CACHE = 'inventario-img-v1';
 const IMG_MAX = 400;
 const ASSETS = [
-    './', 'index.html', 'app.js', 'api.js', 'admin.js', 'style.css',
+    './', 'index.html', 'app.js', 'cliente-api.js', 'admin.js', 'style.css',
     'manifest.webmanifest', 'icon.svg',
     'fonts/outfit-300.ttf', 'fonts/outfit-400.ttf', 'fonts/outfit-500.ttf',
     'fonts/outfit-600.ttf', 'fonts/outfit-700.ttf'
