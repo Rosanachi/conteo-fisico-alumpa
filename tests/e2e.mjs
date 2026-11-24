@@ -82,6 +82,7 @@ T('carga de Excel termina y muestra el resultado', await esperar(() => !document
 const res = await texto('#inv-result');
 const nDavid = filas.filter(f => f.Sucursal === 'David').length;
 T(`resultado: ${filas.length} nuevos (1500 Capital + ${nDavid} David)`, new RegExp('Nuevos: ' + filas.length + ' ').test(res) && /Rechazados: 0/.test(res), res);
+await esperar(() => /1500\s*Capital/.test(document.getElementById('inv-resumen').textContent));
 const resumen = await texto('#inv-resumen');
 T('resumen por sucursal actualizado', /1500\s*Capital/.test(resumen) && new RegExp(nDavid + '\\s*David').test(resumen), resumen);
 
