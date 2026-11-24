@@ -17,7 +17,7 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const CSP = JSON.parse(fs.readFileSync(ROOT + '/vercel.json', 'utf8')).headers[0].headers.find(h => h.key === 'Content-Security-Policy').value;
 const handlers = {
   '/api/setup': require('../api/setup.js'), '/api/auth': require('../api/auth.js'), '/api/catalogo': require('../api/catalogo.js'),
-  '/api/usuarios': require('../api/usuarios.js'), '/api/inventario': require('../api/inventario.js'), '/api/conteo': require('../api/conteo.js')
+  '/api/usuarios': require('../api/usuarios.js'), '/api/inventario': require('../api/inventario.js'), '/api/conteo': require('../api/conteo.js'), '/api/exportar': require('../api/exportar.js')
 };
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ttf': 'font/ttf', '.webmanifest': 'application/manifest+json' };
 
@@ -162,7 +162,53 @@ await pg1.select('#select-ubicacion', '').catch(() => {});
 const r401 = await pg1.evaluate(async () => (await fetch('/api/catalogo')).status);
 T('usuario desactivado recibe 401', r401 === 401);
 
-await pg1.screenshot({ path: 'E:/KIRO/tools-conteo/e2e_final.png' });
+
+// ---- El administrador descarga los conteos finalizados ----
+await pg1.reload({ waitUntil: 'networkidle0' });
+await login('admin', 'Clave12345');
+T('admin ve la lista de conteos finalizados', await esperar(() => document.querySelectorAll('#cnt-list tbody tr').length === 1));
+const fila = await texto('#cnt-list tbody tr');
+if (!fila) console.log('DEBUG cnt-list:', await texto('#cnt-list'), '| abiertos:', await texto('#cnt-abiertos'), '| errores:', errores.join(' | '));
+T('la fila muestra sucursal, ubicación y usuario', /Capital/.test(fila) && /Rack Vertical 1 - Sección A/.test(fila) && /Ana Pérez/.test(fila), fila);
+
+const dir = path.join(process.env.TEMP, 'dl_' + Date.now());
+fs.mkdirSync(dir, { recursive: true });
+const cdp = await pg1.createCDPSession();
+await cdp.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: dir });
+const esperarArchivo = async (prefijo) => {
+  for (let i = 0; i < 40; i++) {
+    const f = fs.readdirSync(dir).find(x => x.startsWith(prefijo) && x.endsWith('.xlsx'));
+    if (f) return path.join(dir, f);
+    await new Promise(r => setTimeout(r, 250));
+  }
+  return null;
+};
+await pg1.click('#cnt-list tbody tr button.btn-success');
+const archivo = await esperarArchivo('conteo_');
+T('se descarga el Excel del conteo', !!archivo, fs.readdirSync(dir).join());
+if (archivo) {
+  const wbx = XLSX.readFile(archivo);
+  const hoja = wbx.Sheets[wbx.SheetNames[0]];
+  const cab = XLSX.utils.sheet_to_json(hoja, { header: 1 })[0];
+  T('columnas exactas y sin Diferencias', cab.join('|') === 'Código|Alterno|Nombre|Sucursal|Costo|Existencia|Contado|Ubicación Asignada|Usuario|Fecha de Conteo', cab.join('|'));
+  const datos = XLSX.utils.sheet_to_json(hoja);
+  T('el Excel trae el artículo contado (7 unidades)', datos.length === 1 && datos[0]['Código'] === 'PAANG00830BLS19' && datos[0]['Contado'] === 7, JSON.stringify(datos));
+  T('con ubicación, usuario y fecha', datos[0]['Ubicación Asignada'] === 'Rack Vertical 1 - Sección A' && datos[0]['Usuario'] === 'Ana Pérez' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(datos[0]['Fecha de Conteo']), JSON.stringify(datos[0]));
+}
+await pg1.click('#cnt-all-btn');
+const consolidado = await esperarArchivo('consolidado_');
+T('se descarga el consolidado', !!consolidado);
+
+await pg1.evaluate(() => {
+  window.__shared = null;
+  Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true });
+  Object.defineProperty(navigator, 'share', { value: async d => { window.__shared = { n: d.files[0].name, size: d.files[0].size, type: d.files[0].type }; }, configurable: true });
+});
+await pg1.click('#cnt-list tbody tr button.btn-secondary');
+await esperar(() => window.__shared !== null);
+const compartido = await pg1.evaluate(() => window.__shared);
+T('WhatsApp: abre el menú de compartir con el Excel adjunto', compartido && /^conteo_Capital_/.test(compartido.n) && compartido.size > 1000 && /spreadsheetml/.test(compartido.type), JSON.stringify(compartido));
+await pg1.screenshot({ path: 'E:/KIRO/tools-conteo/e2e_final.png', fullPage: true });
 T('sin errores de JavaScript en la consola', errores.length === 0, errores.join(' | '));
 await br.close();
 srv.close();

@@ -43,13 +43,19 @@ async function initAdmin() {
         $a('inv-template-btn').addEventListener('click', downloadInventoryTemplate);
         $a('user-form').addEventListener('submit', onCreateUser);
         $a('user-rol').addEventListener('change', () => { $a('user-sucursal').disabled = $a('user-rol').value !== 'operador'; });
+        $a('cnt-sucursal').addEventListener('change', refreshConteos);
+        $a('cnt-refresh-btn').addEventListener('click', refreshConteos);
+        $a('cnt-all-btn').addEventListener('click', () => exportar(null, false));
+        $a('cnt-all-wa-btn').addEventListener('click', () => exportar(null, true));
     }
-    await Promise.all([refreshResumen(), refreshUsers()]);
+    await refreshResumen();
+    await Promise.all([refreshUsers(), refreshConteos()]);
 }
 
 // Se llama al cerrar sesión: nada del panel queda en pantalla
 function clearAdminData() {
-    ['inv-resumen', 'user-list', 'inv-result'].forEach(id => $a(id).replaceChildren());
+    ['inv-resumen', 'user-list', 'inv-result', 'cnt-list', 'cnt-abiertos'].forEach(id => $a(id).replaceChildren());
+    $a('cnt-abiertos').hidden = true;
     $a('inv-result').hidden = true;
     $a('inv-progress').hidden = true;
     $a('user-msg').textContent = '';
@@ -66,6 +72,11 @@ async function refreshResumen() {
         const sel = $a('user-sucursal');
         sel.replaceChildren(new Option('Todas las sucursales', ''));
         sucursales.forEach(s => sel.add(new Option(s.nombre, s.id)));
+        const filtro = $a('cnt-sucursal');
+        const actual = filtro.value;
+        filtro.replaceChildren(new Option('Todas las sucursales', ''));
+        sucursales.forEach(s => filtro.add(new Option(s.nombre, s.id)));
+        filtro.value = actual;
     } catch (e) {
         $a('inv-resumen').textContent = e.message;
     }
@@ -213,4 +224,122 @@ async function onCreateUser(e) {
     } catch (err) {
         msg.textContent = err.message;
     }
+}
+
+// ---------- Conteos finalizados: lista, descarga y WhatsApp ----------
+const EXPORT_HEADERS = ['Código', 'Alterno', 'Nombre', 'Sucursal', 'Costo', 'Existencia', 'Contado', 'Ubicación Asignada', 'Usuario', 'Fecha de Conteo'];
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+const pad2 = n => String(n).padStart(2, '0');
+function fmtFecha(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+const nombreSeguro = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+async function refreshConteos() {
+    const suc = $a('cnt-sucursal').value;
+    try {
+        const { finalizados, abiertos } = await api('/api/exportar?action=lista' + (suc ? '&sucursal=' + encodeURIComponent(suc) : ''));
+
+        const ab = $a('cnt-abiertos');
+        if (abiertos.length) {
+            ab.replaceChildren(el('strong', { textContent: `En curso (${abiertos.length}): ` }),
+                document.createTextNode(abiertos.map(c => `${c.sucursal} › ${c.ubicacion} (${c.usuario})`).join(' · ')));
+            ab.hidden = false;
+        } else {
+            ab.replaceChildren();
+            ab.hidden = true;
+        }
+
+        if (!finalizados.length) {
+            $a('cnt-list').replaceChildren(el('p', { class: 'upload-hint', textContent: 'Aún no hay conteos finalizados.' }));
+            return;
+        }
+        const tbody = el('tbody');
+        finalizados.forEach(c => {
+            const acciones = el('td', { class: 'user-actions' });
+            const bDescargar = el('button', { type: 'button', class: 'btn btn-success btn-sm', textContent: 'Descargar' });
+            bDescargar.addEventListener('click', () => exportar(c, false, bDescargar));
+            const bWa = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', textContent: 'WhatsApp' });
+            bWa.addEventListener('click', () => exportar(c, true, bWa));
+            acciones.append(bDescargar, bWa);
+            tbody.append(el('tr', {},
+                el('td', { textContent: c.sucursal }), el('td', { textContent: c.ubicacion }), el('td', { textContent: c.usuario }),
+                el('td', { textContent: fmtFecha(c.finalizado_en) }),
+                el('td', { class: 'num-col', textContent: String(c.articulos) }), el('td', { class: 'num-col', textContent: String(c.unidades) }),
+                acciones));
+        });
+        const thead = el('thead', {}, el('tr', {}, ...['Sucursal', 'Ubicación', 'Usuario', 'Finalizado', 'Artículos', 'Unidades', ''].map(t => el('th', { textContent: t }))));
+        $a('cnt-list').replaceChildren(el('table', { class: 'items-table user-table' }, thead, tbody));
+    } catch (e) {
+        $a('cnt-list').textContent = e.message;
+    }
+}
+
+// Libro de Excel con las columnas pedidas (sin diferencias). Solo lleva conteos finalizados.
+function buildExportWorkbook(filas) {
+    const datos = filas.map(f => ({
+        'Código': f.codigo, 'Alterno': f.alterno, 'Nombre': f.nombre, 'Sucursal': f.sucursal,
+        'Costo': f.costo, 'Existencia': f.existencia, 'Contado': f.contado,
+        'Ubicación Asignada': f.ubicacion, 'Usuario': f.usuario, 'Fecha de Conteo': fmtFecha(f.finalizado_en)
+    }));
+    const ws = XLSX.utils.json_to_sheet(datos, { header: EXPORT_HEADERS });
+    ws['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 40 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 30 }, { wch: 22 }, { wch: 18 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Conteo');
+    return wb;
+}
+
+// conteo = fila de la lista (un conteo) o null (consolidado de todos los finalizados del filtro)
+async function exportar(conteo, porWhatsApp, boton) {
+    if (boton) boton.disabled = true;
+    try {
+        await loadXlsx();
+        const suc = $a('cnt-sucursal').value;
+        const url = conteo
+            ? `/api/exportar?action=filas&conteo=${conteo.id}`
+            : '/api/exportar?action=filas&todos=1' + (suc ? '&sucursal=' + encodeURIComponent(suc) : '');
+        const { filas } = await api(url);
+        if (!filas.length) { alert('No hay conteos finalizados para descargar.'); return; }
+
+        const fecha = fmtFecha(new Date().toISOString()).replace(/[ :]/g, '-');
+        const nombre = conteo
+            ? `conteo_${nombreSeguro(conteo.sucursal)}_${nombreSeguro(conteo.ubicacion)}_${fecha}.xlsx`
+            : `consolidado_${suc ? nombreSeguro($a('cnt-sucursal').selectedOptions[0].textContent) : 'todas'}_${fecha}.xlsx`;
+        const wb = buildExportWorkbook(filas);
+
+        if (!porWhatsApp) {
+            XLSX.writeFile(wb, nombre);
+            return;
+        }
+        await compartirPorWhatsApp(wb, nombre, conteo ? `Conteo ${conteo.sucursal} › ${conteo.ubicacion}` : 'Conteo físico consolidado');
+    } catch (e) {
+        alert('No se pudo generar el Excel: ' + e.message);
+    } finally {
+        if (boton) boton.disabled = false;
+    }
+}
+
+// En el móvil abre el menú de compartir (WhatsApp aparece en la lista) con el Excel adjunto.
+// WhatsApp no permite adjuntar un archivo desde un enlace, por eso se usa el menú del sistema.
+async function compartirPorWhatsApp(wb, nombre, texto) {
+    const bytes = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const file = new File([bytes], nombre, { type: XLSX_MIME });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+            await navigator.share({ files: [file], title: nombre, text: texto });
+        } catch (e) {
+            if (e.name !== 'AbortError') {
+                alert('No se pudo abrir el menú de compartir. Se descargará el archivo.');
+                XLSX.writeFile(wb, nombre);
+            }
+        }
+        return;
+    }
+    // Navegador sin compartir archivos (p. ej. PC): descarga el Excel y abre WhatsApp para adjuntarlo
+    XLSX.writeFile(wb, nombre);
+    alert('Este dispositivo no permite compartir archivos directamente.\nSe descargó el Excel; se abrirá WhatsApp para que lo adjunte.');
+    window.open('https://wa.me/?text=' + encodeURIComponent(texto), '_blank', 'noopener');
 }

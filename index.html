@@ -78,6 +78,19 @@
         <!-- PANTALLA: ADMINISTRACIÓN -->
         <main id="admin-view" class="view-panel">
             <section class="card admin-card">
+                <h2>Conteos</h2>
+                <p class="upload-hint">Solo se pueden descargar los conteos que el operador ya marcó como "Finalizado Conteo". Cada conteo corresponde a una ubicación.</p>
+                <div class="admin-actions">
+                    <select id="cnt-sucursal" class="text-input admin-select" aria-label="Filtrar por sucursal"></select>
+                    <button id="cnt-refresh-btn" class="btn btn-secondary" type="button">Actualizar</button>
+                    <button id="cnt-all-btn" class="btn btn-success" type="button">Descargar consolidado</button>
+                    <button id="cnt-all-wa-btn" class="btn btn-success" type="button">Consolidado por WhatsApp</button>
+                </div>
+                <div id="cnt-abiertos" class="admin-result" hidden></div>
+                <div id="cnt-list" class="table-responsive-wrapper user-list-wrap"></div>
+            </section>
+
+            <section class="card admin-card">
                 <h2>Inventario por sucursal</h2>
                 <div id="inv-resumen" class="admin-resumen"></div>
                 <p class="upload-hint">Suba un Excel consolidado con las columnas: Código, Alterno, Nombre, Sucursal, Costo, Existencia. Si el código ya existe en esa sucursal, se actualiza.</p>
