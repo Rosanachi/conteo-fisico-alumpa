@@ -17,7 +17,8 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const CSP = JSON.parse(fs.readFileSync(ROOT + '/vercel.json', 'utf8')).headers[0].headers.find(h => h.key === 'Content-Security-Policy').value;
 const handlers = {
   '/api/setup': require('../api/setup.js'), '/api/auth': require('../api/auth.js'), '/api/catalogo': require('../api/catalogo.js'),
-  '/api/usuarios': require('../api/usuarios.js'), '/api/inventario': require('../api/inventario.js'), '/api/conteo': require('../api/conteo.js'), '/api/exportar': require('../api/exportar.js')
+  '/api/usuarios': require('../api/usuarios.js'), '/api/inventario': require('../api/inventario.js'), '/api/conteo': require('../api/conteo.js'), '/api/exportar': require('../api/exportar.js'),
+  '/api/borrar-conteos': require('../api/borrar-conteos.js')
 };
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.ttf': 'font/ttf', '.webmanifest': 'application/manifest+json' };
 
@@ -237,6 +238,54 @@ await pg1.click('#cnt-list tbody tr button.btn-secondary');
 await esperar(() => window.__shared !== null);
 const compartido = await pg1.evaluate(() => window.__shared);
 T('WhatsApp: abre el menú de compartir con el Excel adjunto', compartido && /^conteo_Capital_/.test(compartido.n) && compartido.size > 1000 && /spreadsheetml/.test(compartido.type), JSON.stringify(compartido));
+
+// ---- Borrar conteos (administrador) ----
+// Diálogos: confirmaciones se aceptan; en el prompt se escribe BORRAR
+pg1.removeAllListeners('dialog');
+pg1.on('dialog', async d => { dialogos.push(d.message()); await (d.type() === 'prompt' ? d.accept('BORRAR') : d.accept()); });
+// Datos extra: un segundo conteo finalizado (Capital) y uno en curso (David), creados directo en la base
+const sid = async n => (await pg.query('SELECT id FROM sucursales WHERE nombre=$1', [n])).rows[0].id;
+const capital = await sid('Capital'), david = await sid('David');
+const adminId = (await pg.query("SELECT id FROM usuarios WHERE usuario='admin'")).rows[0].id;
+const ubic2 = (await pg.query("SELECT id FROM ubicaciones WHERE sucursal_id=$1 AND nombre='Piso 1'", [capital])).rows[0].id;
+const ubicD = (await pg.query("SELECT id FROM ubicaciones WHERE sucursal_id=$1 AND nombre='Piso 1'", [david])).rows[0].id;
+const artC = (await pg.query('SELECT id FROM articulos WHERE sucursal_id=$1 LIMIT 1', [capital])).rows[0].id;
+const c2 = (await pg.query("INSERT INTO conteos (sucursal_id, ubicacion_id, usuario_id, estado, finalizado_en) VALUES ($1,$2,$3,'finalizado',now()) RETURNING id", [capital, ubic2, adminId])).rows[0].id;
+await pg.query('INSERT INTO conteo_lineas (conteo_id, articulo_id, cantidad) VALUES ($1,$2,4)', [c2, artC]);
+await pg.query("INSERT INTO conteos (sucursal_id, ubicacion_id, usuario_id) VALUES ($1,$2,$3)", [david, ubicD, adminId]);
+await pg1.click('#cnt-refresh-btn');
+T('la lista muestra 2 finalizados y 1 en curso con botón Borrar', await esperar(() => document.querySelectorAll('#cnt-list tbody tr').length === 2 && document.querySelectorAll('#cnt-abiertos .open-list button').length === 1));
+
+// Borrar uno (finalizado): descarga respaldo y desaparece de la lista
+const filaPiso = await pg1.$$eval('#cnt-list tbody tr', trs => trs.findIndex(t => /Piso 1/.test(t.textContent)));
+await (await pg1.$$('#cnt-list tbody tr'))[filaPiso].$eval('button.btn-danger-outline', b => b.click());
+T('borrar uno: pide confirmación', await esperar(() => true) && /Borrar el conteo finalizado/.test(dialogos.at(-1) || ''), dialogos.at(-1));
+T('borrar uno: se descarga el respaldo', !!(await esperarArchivo('respaldo_conteo_Capital_Piso-1')), fs.readdirSync(dir).join());
+T('borrar uno: desaparece de la lista y de la base', await esperar(() => document.querySelectorAll('#cnt-list tbody tr').length === 1) &&
+  (await pg.query('SELECT count(*)::int c FROM conteos WHERE id=$1', [c2])).rows[0].c === 0);
+
+// Borrar todos los finalizados: confirma, pide escribir BORRAR, descarga consolidado de respaldo y deja el en curso
+await pg1.click('#cnt-delete-all-btn');
+T('borrar todos: se descarga el consolidado de respaldo', !!(await esperarArchivo('respaldo_consolidado_todas')), fs.readdirSync(dir).join());
+T('borrar todos: la lista de finalizados queda vacía', await esperar(() => /Aún no hay conteos finalizados/.test(document.getElementById('cnt-list').textContent)));
+T('borrar todos: pidió escribir BORRAR y confirmó el resultado', dialogos.some(m => /Escriba BORRAR/.test(m)) && /Se borraron 1 conteo/.test(dialogos.at(-1)), dialogos.slice(-3).join(' | '));
+T('el conteo en curso NO se borró', (await pg.query("SELECT count(*)::int c FROM conteos WHERE estado='abierto'")).rows[0].c === 1 && await vis('#cnt-abiertos'));
+
+// Borrar el conteo en curso
+await pg1.click('#cnt-abiertos .open-list button');
+T('borrar en curso: avisa que el operador perderá lo contado', await esperar(() => document.getElementById('cnt-abiertos').hidden) && /EN CURSO/.test(dialogos.find(m => /EN CURSO/.test(m)) || ''));
+T('ya no quedan conteos en la base', (await pg.query('SELECT count(*)::int c FROM conteos')).rows[0].c === 0 && (await pg.query('SELECT count(*)::int c FROM conteo_lineas')).rows[0].c === 0);
+
+// Texto incorrecto en el prompt: no se borra nada
+pg1.removeAllListeners('dialog');
+pg1.on('dialog', async d => { dialogos.push(d.message()); await (d.type() === 'prompt' ? d.accept('borrar') : d.accept()); });
+const c3 = (await pg.query("INSERT INTO conteos (sucursal_id, ubicacion_id, usuario_id, estado, finalizado_en) VALUES ($1,$2,$3,'finalizado',now()) RETURNING id", [capital, ubic2, adminId])).rows[0].id;
+await pg.query('INSERT INTO conteo_lineas (conteo_id, articulo_id, cantidad) VALUES ($1,$2,1)', [c3, artC]);
+await pg1.click('#cnt-delete-all-btn');
+await esperar(() => /no coincide/.test(window.__lastAlert || ''), 1500);
+await new Promise(r => setTimeout(r, 800));
+T('si no escribe BORRAR exacto, no se borra nada', /no coincide/.test(dialogos.at(-1) || '') && (await pg.query('SELECT count(*)::int c FROM conteos')).rows[0].c === 1, dialogos.at(-1));
+
 await pg1.screenshot({ path: 'E:/KIRO/tools-conteo/e2e_final.png', fullPage: true });
 T('sin errores de JavaScript en la consola', errores.length === 0, errores.join(' | '));
 await br.close();

@@ -47,6 +47,7 @@ async function initAdmin() {
         $a('cnt-refresh-btn').addEventListener('click', refreshConteos);
         $a('cnt-all-btn').addEventListener('click', () => exportar(null, false));
         $a('cnt-all-wa-btn').addEventListener('click', () => exportar(null, true));
+        $a('cnt-delete-all-btn').addEventListener('click', borrarTodos);
     }
     await refreshResumen();
     await Promise.all([refreshUsers(), refreshConteos()]);
@@ -245,8 +246,13 @@ async function refreshConteos() {
 
         const ab = $a('cnt-abiertos');
         if (abiertos.length) {
-            ab.replaceChildren(el('strong', { textContent: `En curso (${abiertos.length}): ` }),
-                document.createTextNode(abiertos.map(c => `${c.sucursal} › ${c.ubicacion} (${c.usuario})`).join(' · ')));
+            const ul = el('ul', { class: 'open-list' });
+            abiertos.forEach(c => {
+                const bBorrar = el('button', { type: 'button', class: 'btn btn-danger-outline btn-sm', textContent: 'Borrar' });
+                bBorrar.addEventListener('click', () => borrarUno(c, true, bBorrar));
+                ul.append(el('li', {}, el('span', { textContent: `${c.sucursal} › ${c.ubicacion} (${c.usuario}) · desde ${fmtFecha(c.creado)}` }), bBorrar));
+            });
+            ab.replaceChildren(el('strong', { textContent: `En curso (${abiertos.length}) — aún no se pueden descargar:` }), ul);
             ab.hidden = false;
         } else {
             ab.replaceChildren();
@@ -264,7 +270,9 @@ async function refreshConteos() {
             bDescargar.addEventListener('click', () => exportar(c, false, bDescargar));
             const bWa = el('button', { type: 'button', class: 'btn btn-secondary btn-sm', textContent: 'WhatsApp' });
             bWa.addEventListener('click', () => exportar(c, true, bWa));
-            acciones.append(bDescargar, bWa);
+            const bBorrar = el('button', { type: 'button', class: 'btn btn-danger-outline btn-sm', textContent: 'Borrar' });
+            bBorrar.addEventListener('click', () => borrarUno(c, false, bBorrar));
+            acciones.append(bDescargar, bWa, bBorrar);
             tbody.append(el('tr', {},
                 el('td', { textContent: c.sucursal }), el('td', { textContent: c.ubicacion }), el('td', { textContent: c.usuario }),
                 el('td', { textContent: fmtFecha(c.finalizado_en) }),
@@ -290,6 +298,64 @@ function buildExportWorkbook(filas) {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Conteo');
     return wb;
+}
+
+// ---------- Borrado de conteos (definitivo, con respaldo en Excel antes) ----------
+// Descarga un Excel de respaldo. Devuelve el número de filas respaldadas (0 si no había nada).
+async function descargarRespaldo(conteo, sucursalId) {
+    await loadXlsx();
+    const url = conteo
+        ? `/api/exportar?action=filas&conteo=${conteo.id}`
+        : '/api/exportar?action=filas&todos=1' + (sucursalId ? '&sucursal=' + encodeURIComponent(sucursalId) : '');
+    const { filas } = await api(url);
+    if (!filas.length) return 0;
+    const fecha = fmtFecha(new Date().toISOString()).replace(/[ :]/g, '-');
+    const nombre = conteo
+        ? `respaldo_conteo_${nombreSeguro(conteo.sucursal)}_${nombreSeguro(conteo.ubicacion)}_${fecha}.xlsx`
+        : `respaldo_consolidado_${sucursalId ? nombreSeguro($a('cnt-sucursal').selectedOptions[0].textContent) : 'todas'}_${fecha}.xlsx`;
+    XLSX.writeFile(buildExportWorkbook(filas), nombre);
+    return filas.length;
+}
+
+// enCurso = true para un conteo que el operador todavía no finalizó
+async function borrarUno(conteo, enCurso, boton) {
+    const lugar = `${conteo.sucursal} › ${conteo.ubicacion} (${conteo.usuario})`;
+    const aviso = enCurso
+        ? `¿Borrar el conteo EN CURSO de ${lugar}?\n\nEl operador perderá lo que lleva contado en esa ubicación y tendrá que empezar de nuevo. No se puede deshacer.`
+        : `¿Borrar el conteo finalizado de ${lugar}?\n\nAntes se descargará un Excel de respaldo. Después no se podrá recuperar.`;
+    if (!confirm(aviso)) return;
+    boton.disabled = true;
+    try {
+        if (!enCurso) await descargarRespaldo(conteo, null);
+        await api('/api/borrar-conteos?action=uno', { method: 'POST', body: { conteo_id: conteo.id } });
+        await refreshConteos();
+    } catch (e) {
+        alert('No se pudo borrar el conteo: ' + e.message);
+        boton.disabled = false;
+    }
+}
+
+// Borra todos los conteos FINALIZADOS del filtro actual (una sucursal o todas). Los conteos en curso no se tocan.
+async function borrarTodos() {
+    const sucId = $a('cnt-sucursal').value;
+    const alcance = sucId ? `de ${$a('cnt-sucursal').selectedOptions[0].textContent}` : 'de TODAS las sucursales';
+    if (!confirm(`¿Borrar todos los conteos finalizados ${alcance}?\n\nAntes se descargará el consolidado como respaldo. Los conteos en curso no se borran.`)) return;
+    const escrito = prompt('Esta acción no se puede deshacer. Escriba BORRAR para confirmar:');
+    if (escrito === null) return;
+    if (escrito.trim() !== 'BORRAR') { alert('No se borró nada: el texto no coincide.'); return; }
+    const btn = $a('cnt-delete-all-btn');
+    btn.disabled = true;
+    try {
+        const respaldadas = await descargarRespaldo(null, sucId);
+        if (!respaldadas) { alert('No hay conteos finalizados para borrar.'); return; }
+        const r = await api('/api/borrar-conteos?action=todos', { method: 'POST', body: { confirmar: 'BORRAR', sucursal_id: sucId || null } });
+        alert(`Se borraron ${r.conteos} conteo(s). El respaldo quedó en sus descargas.`);
+        await refreshConteos();
+    } catch (e) {
+        alert('No se pudo completar el borrado: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 // conteo = fila de la lista (un conteo) o null (consolidado de todos los finalizados del filtro)

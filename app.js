@@ -493,11 +493,22 @@ async function finishCount() {
         clearScreenData();
         await showSelectView(`Conteo finalizado en ${lugar}: ${r.articulos_contados} artículo(s). Puede iniciar otro conteo.`);
     } catch (e) {
-        alert(e.message);
         closeFinishModal();
+        if (await handleCountGone(e)) return;
+        alert(e.message);
     } finally {
         DOM.finishConfirmBtn.disabled = false;
     }
+}
+
+// El conteo abierto ya no existe (el administrador lo borró): se limpia la pantalla y se vuelve a la selección
+async function handleCountGone(e) {
+    if (!(e && e.status === 409 && /No tiene un conteo abierto/.test(e.message))) return false;
+    const lugar = currentCount ? `${currentCount.sucursal} › ${currentCount.ubicacion}` : 'esta ubicación';
+    DOM.countingModal.classList.remove('active');
+    clearScreenData();
+    await showSelectView(`El administrador borró el conteo de ${lugar}. Puede iniciar uno nuevo.`);
+    return true;
 }
 
 function setStatus(type, text) {
@@ -917,6 +928,7 @@ async function saveCount() {
         renderList();
         closeCountingModal();
     } catch (e) {
+        if (await handleCountGone(e)) return;
         // No se cierra el modal: lo escrito no se pierde y puede reintentar
         alert('No se pudo guardar el conteo: ' + e.message);
     } finally {

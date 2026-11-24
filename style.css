@@ -1308,3 +1308,7 @@ body {
 .header-status { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .user-chip { margin-right: 0; }
 .admin-select { max-width: 260px; }
+
+/* Conteos en curso con botón Borrar */
+.open-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.open-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
