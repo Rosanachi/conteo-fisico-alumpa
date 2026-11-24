@@ -3,21 +3,12 @@ let inventory = [];
 let selectedItem = null;
 let currentFilter = 'all';
 let searchQuery = '';
-let fileName = 'inventario.xlsx';
 let renderLimit = 100;
 const RENDER_PAGE_SIZE = 100;
-const STORAGE_KEYS = { inventory: 'antigravity_inventory', fileName: 'antigravity_filename', counter: 'antigravity_counter' };
-
-// Nombres de columna aceptados (sin acentos, en minúsculas)
-const COLUMN_KEYS = {
-    codigo: ['codigo', 'code'],
-    alterno: ['alterno', 'alternativo', 'alternate'],
-    nombre: ['nombre', 'articulo', 'name', 'desc', 'descripcion'],
-    bodega: ['bodega', 'almacen', 'warehouse'],
-    costo: ['costo', 'cost', 'precio', 'price', 'valor', 'value'],
-    existencia: ['existencia', 'existencias', 'stock', 'cant', 'cantidad', 'qty'],
-    contado: ['contado', 'conteo', 'counted']
-};
+let currentUser = null;      // { usuario, nombre, rol, sucursal_id, sucursal }
+let currentCount = null;     // conteo abierto: { id, sucursal, ubicacion, ... }
+// Claves de la versión local anterior (el inventario ya no se guarda en el navegador)
+const LEGACY_STORAGE_KEYS = ['antigravity_inventory', 'antigravity_filename', 'antigravity_counter'];
 
 // Escapa texto antes de insertarlo como HTML (evita inyección desde el Excel)
 function escapeHtml(value) {
@@ -112,13 +103,19 @@ function debounce(fn, ms) {
 
 // Elementos del DOM
 const DOM = {
-    selectFileBtn: document.getElementById('select-file-btn'),
     showMoreBtn: document.getElementById('show-more-btn'),
     showMoreWrapper: document.getElementById('show-more-wrapper'),
     listNote: document.getElementById('list-note'),
-    uploadView: document.getElementById('upload-view'),
+    views: document.querySelectorAll('.view-panel'),
     dashboardView: document.getElementById('dashboard-view'),
-    excelFileInput: document.getElementById('excel-file-input'),
+    userChip: document.getElementById('user-chip'),
+    userName: document.getElementById('user-name'),
+    logoutBtn: document.getElementById('logout-btn'),
+    finishCountBtn: document.getElementById('finish-count-btn'),
+    finishModal: document.getElementById('finish-modal'),
+    finishText: document.getElementById('finish-text'),
+    finishCancelBtn: document.getElementById('finish-cancel-btn'),
+    finishConfirmBtn: document.getElementById('finish-confirm-btn'),
     statusIndicator: document.getElementById('status-indicator'),
     statusText: document.getElementById('status-text'),
     loadedFileName: document.getElementById('loaded-file-name'),
@@ -128,13 +125,11 @@ const DOM = {
     statCounted: document.getElementById('stat-counted'),
     statCountedPct: document.getElementById('stat-counted-pct'),
     statPending: document.getElementById('stat-pending'),
-    statDiff: document.getElementById('stat-diff'),
     
     // Badges en pestañas
     badgeAll: document.getElementById('badge-all'),
     badgePending: document.getElementById('badge-pending'),
     badgeCounted: document.getElementById('badge-counted'),
-    badgeDiff: document.getElementById('badge-diff'),
     
     // Búsqueda y Tabla
     searchInput: document.getElementById('search-input'),
@@ -145,11 +140,6 @@ const DOM = {
     filterTabs: document.querySelectorAll('.filter-tab'),
     
     // Botones Principales
-    downloadTemplateBtn: document.getElementById('download-template-btn'),
-    downloadResultsBtn: document.getElementById('download-results-btn'),
-    shareWhatsappBtn: document.getElementById('share-whatsapp-btn'),
-    clearCountsBtn: document.getElementById('clear-counts-btn'),
-    loadNewFileBtn: document.getElementById('load-new-file-btn'),
     
     // Modal de Conteo
     countingModal: document.getElementById('counting-modal'),
@@ -171,17 +161,18 @@ const DOM = {
     addPartialBtn: document.getElementById('add-partial-btn'),
     partialList: document.getElementById('partial-list'),
     partialEmpty: document.getElementById('partial-empty'),
-    summaryTotalCounted: document.getElementById('summary-total-counted'),
-    summaryDifference: document.getElementById('summary-difference')
+    summaryTotalCounted: document.getElementById('summary-total-counted')
 };
 
 // ----------------------------------------------------
 // 1. INICIALIZACIÓN
 // ----------------------------------------------------
 function init() {
+    // Borra restos de la versión local anterior (inventario guardado en el navegador)
+    LEGACY_STORAGE_KEYS.forEach(k => { try { localStorage.removeItem(k); } catch (e) { /* ignorar */ } });
     setupEventListeners();
-    loadFromLocalStorage();
     registerServiceWorker();
+    startSession();
     loadCatalogIndex();
     // Si una imagen falla (sin conexión o archivo ausente) se muestra el recuadro vacío
     document.addEventListener('error', (e) => {
@@ -203,15 +194,7 @@ function registerServiceWorker() {
 
 // Escuchar eventos de la UI
 function setupEventListeners() {
-    // Carga de archivos
-    DOM.excelFileInput.addEventListener('change', handleFileSelect);
-    setupDragAndDrop();
-
-    // Descarga de Plantilla
-    DOM.downloadTemplateBtn.addEventListener('click', downloadTemplate);
-
     // Búsqueda
-    DOM.selectFileBtn.addEventListener('click', () => DOM.excelFileInput.click());
     DOM.searchInput.addEventListener('input', debounce(handleSearch, 200));
     DOM.clearSearchBtn.addEventListener('click', clearSearch);
     DOM.showMoreBtn.addEventListener('click', () => {
@@ -267,10 +250,11 @@ function setupEventListeners() {
     });
 
     // Botones de acción principales
-    DOM.downloadResultsBtn.addEventListener('click', downloadResults);
-    DOM.shareWhatsappBtn.addEventListener('click', shareResultsWhatsApp);
-    DOM.clearCountsBtn.addEventListener('click', confirmClearCounts);
-    DOM.loadNewFileBtn.addEventListener('click', confirmLoadNewFile);
+    DOM.finishCountBtn.addEventListener('click', openFinishModal);
+    DOM.finishCancelBtn.addEventListener('click', closeFinishModal);
+    DOM.finishConfirmBtn.addEventListener('click', finishCount);
+    DOM.logoutBtn.addEventListener('click', logout);
+    setupSessionListeners();
 
     // Modal de Conteo
     DOM.modalCloseX.addEventListener('click', closeCountingModal);
@@ -313,234 +297,227 @@ function setupEventListeners() {
 }
 
 // ----------------------------------------------------
-// 2. LECTURA Y CARGA DE ARCHIVOS EXCEL
-// ----------------------------------------------------
-function setupDragAndDrop() {
-    const dropZone = DOM.uploadView.querySelector('.upload-card');
-    
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropZone.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            dropZone.classList.add('dragover');
-        }, false);
-    });
-
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            dropZone.classList.remove('dragover');
-        }, false);
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-        const dt = e.dataTransfer;
-        const files = dt.files;
-        if (files.length > 0 && files[0].name.match(/\.(xlsx|xls)$/i)) {
-            processFile(files[0]);
-        } else {
-            alert('Por favor, arrastre únicamente un archivo de Excel (.xlsx o .xls).');
-        }
-    }, false);
-    
-    // También permitir hacer click en la tarjeta para subir
-    dropZone.addEventListener('click', (e) => {
-        // Evitar triggers infinitos si se da click al botón interno
-        if (e.target.tagName !== 'BUTTON') {
-            DOM.excelFileInput.click();
-        }
-    });
-}
-
-function handleFileSelect(e) {
-    const files = e.target.files;
-    if (files.length > 0) {
-        processFile(files[0]);
-    }
-}
-
-function processFile(file) {
-    fileName = file.name;
-    const reader = new FileReader();
-    
-    // Cambiar estado a cargando
-    setStatus('loading', 'Cargando archivo...');
-    
-    reader.onload = function(e) {
-        try {
-            const data = new Uint8Array(e.target.result);
-            const workbook = XLSX.read(data, { type: 'array' });
-            
-            if (workbook.SheetNames.length === 0) {
-                throw new Error("El archivo Excel no contiene hojas de trabajo.");
-            }
-            
-            const firstSheetName = workbook.SheetNames[0];
-            const worksheet = workbook.Sheets[firstSheetName];
-            const jsonData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
-            
-            if (jsonData.length === 0) {
-                throw new Error("La hoja de cálculo está vacía.");
-            }
-            
-            // Verificar que el archivo tenga las columnas necesarias
-            const foundColumns = new Set();
-            Object.keys(jsonData[0]).forEach(header => {
-                const clean = normalizeKey(header);
-                Object.keys(COLUMN_KEYS).forEach(field => {
-                    if (COLUMN_KEYS[field].includes(clean)) foundColumns.add(field);
-                });
-            });
-            if (!foundColumns.has('codigo') || !foundColumns.has('existencia')) {
-                const missing = ['codigo', 'existencia'].filter(f => !foundColumns.has(f));
-                throw new Error(`Faltan columnas obligatorias: ${missing.join(', ')}.\nColumnas encontradas: ${Object.keys(jsonData[0]).join(', ') || 'ninguna'}.\nDescargue la plantilla para ver el formato esperado.`);
-            }
-            const optionalMissing = ['nombre', 'bodega', 'costo'].filter(f => !foundColumns.has(f));
-            
-            // Procesar y normalizar columnas
-            const previousInventory = inventory;
-            inventory = mapExcelData(jsonData);
-            if (inventory.length === 0) {
-                inventory = previousInventory;
-                throw new Error("No se encontraron filas con código o nombre.");
-            }
-            renderLimit = RENDER_PAGE_SIZE;
-            
-            // Guardar en LocalStorage y cambiar de vista
-            saveToLocalStorage();
-            if (optionalMissing.length > 0) {
-                alert(`Archivo cargado. No se encontraron estas columnas y se dejaron vacías o en 0: ${optionalMissing.join(', ')}.`);
-            }
-            showDashboard();
-            
-        } catch (err) {
-            console.error(err);
-            alert("Error al procesar el archivo Excel: " + err.message);
-            setStatus('offline', 'Sin Archivo');
-        }
-    };
-    
-    reader.onerror = function() {
-        alert("Error al leer el archivo.");
-        setStatus('offline', 'Sin Archivo');
-    };
-    
-    reader.readAsArrayBuffer(file);
-}
-
-// Normaliza las columnas para tolerar diferentes encabezados
-function mapExcelData(data) {
-    return data.map((row, index) => {
-        const item = {};
-        
-        // Helper para buscar columnas de forma insensible a mayúsculas/minúsculas y acentos
-        const getValueByPossibleKeys = (keys) => {
-            for (let key in row) {
-                if (keys.includes(normalizeKey(key))) {
-                    return row[key];
-                }
-            }
-            return "";
-        };
-
-        item.id = index;
-        item.codigo = String(getValueByPossibleKeys(COLUMN_KEYS.codigo)).trim();
-        item.alterno = String(getValueByPossibleKeys(COLUMN_KEYS.alterno)).trim();
-        item.nombre = String(getValueByPossibleKeys(COLUMN_KEYS.nombre)).trim();
-        item.bodega = String(getValueByPossibleKeys(COLUMN_KEYS.bodega)).trim();
-        
-        // Costo (numérico)
-        const costVal = getValueByPossibleKeys(COLUMN_KEYS.costo);
-        item.costo = isNaN(parseFloat(costVal)) ? 0 : parseFloat(costVal);
-
-        // Existencia (numérica)
-        const existVal = getValueByPossibleKeys(COLUMN_KEYS.existencia);
-        item.existencia = isNaN(parseFloat(existVal)) ? 0 : parseFloat(existVal);
-        
-        // Contado (ver si ya tiene conteos previos cargados)
-        const countedVal = getValueByPossibleKeys(COLUMN_KEYS.contado);
-        if (countedVal !== "" && !isNaN(parseFloat(countedVal))) {
-            item.contado = parseFloat(countedVal);
-            item.partialCounts = [{ id: Date.now(), qty: item.contado, desc: 'Cargado de Excel' }];
-        } else {
-            item.contado = null; // null significa no contado aún
-            item.partialCounts = [];
-        }
-        
-        // Diferencia
-        item.diferencias = item.contado !== null ? round2(item.contado - item.existencia) : null;
-        
-        // Imagen del catálogo (si el índice aún no cargó, se reasigna al cargarlo)
-        asignarImagenAutomatica(item);
-        
-        return item;
-    }).filter(item => item.codigo !== "" || item.nombre !== ""); // Filtrar filas vacías
-}
-
-// ----------------------------------------------------
-// 3. PERSISTENCIA DE DATOS (LOCALSTORAGE)
-// ----------------------------------------------------
-let storageWarningShown = false;
-
-function saveToLocalStorage() {
-    try {
-        localStorage.setItem(STORAGE_KEYS.inventory, JSON.stringify(inventory));
-        localStorage.setItem(STORAGE_KEYS.fileName, fileName);
-        setStatus('saved', 'Guardado en Navegador');
-        storageWarningShown = false;
-        return true;
-    } catch (e) {
-        console.error("No se pudo guardar en LocalStorage (tal vez excedió cuota):", e);
-        setStatus('error', 'ERROR: no se guardó');
-        if (!storageWarningShown) {
-            storageWarningShown = true;
-            alert("No se pudo guardar el conteo en el navegador (almacenamiento lleno o bloqueado).\nDescargue el Excel ahora para no perder el avance.");
-        }
-        return false;
-    }
-}
-
-function loadFromLocalStorage() {
-    const savedInventory = localStorage.getItem(STORAGE_KEYS.inventory);
-    const savedFileName = localStorage.getItem(STORAGE_KEYS.fileName);
-    
-    if (savedInventory) {
-        try {
-            inventory = JSON.parse(savedInventory);
-            // Corrige conteos guardados antes con demasiados decimales
-            inventory.forEach(it => {
-                if (typeof it.contado === 'number') it.contado = round2(it.contado);
-                if (typeof it.diferencias === 'number') it.diferencias = round2(it.diferencias);
-            });
-            fileName = savedFileName || 'inventario.xlsx';
-            showDashboard();
-        } catch (e) {
-            console.error("Error al leer de LocalStorage:", e);
-            localStorage.removeItem(STORAGE_KEYS.inventory);
-            localStorage.removeItem(STORAGE_KEYS.fileName);
-            showUploadView();
-        }
-    } else {
-        showUploadView();
-    }
-}
-
-// ----------------------------------------------------
 // 4. CONTROL DE PANTALLAS (VISTAS)
 // ----------------------------------------------------
-function showUploadView() {
-    DOM.uploadView.classList.add('active-view');
-    DOM.dashboardView.classList.remove('active-view');
-    setStatus('offline', 'Sin Archivo');
+// Muestra solo la pantalla indicada (login-view, select-view, admin-view, dashboard-view)
+function showView(id) {
+    DOM.views.forEach(v => v.classList.toggle('active-view', v.id === id));
+    DOM.userChip.hidden = !currentUser;
+    if (currentUser) DOM.userName.textContent = `${currentUser.nombre} (${currentUser.rol === 'admin' ? 'Administrador' : 'Operador'})`;
+    window.scrollTo(0, 0);
 }
 
 function showDashboard() {
-    DOM.uploadView.classList.remove('active-view');
-    DOM.dashboardView.classList.add('active-view');
-    DOM.loadedFileName.textContent = fileName;
-    
-    setStatus('online', 'Catálogo Activo');
+    showView('dashboard-view');
+    DOM.loadedFileName.textContent = `${currentCount.sucursal} › ${currentCount.ubicacion}`;
+    setStatus('online', 'Conteo en curso');
     updateStats();
     renderList();
+}
+
+// ----------------------------------------------------
+// 4b. SESIÓN Y FLUJO: login -> sucursal/ubicación -> conteo -> finalizar
+// ----------------------------------------------------
+const $ = id => document.getElementById(id);
+
+function showFormError(id, msg) {
+    const el = $(id);
+    el.textContent = msg || '';
+    el.hidden = !msg;
+}
+
+// Al abrir la app: ¿hay sesión? ¿hay un conteo abierto?
+async function startSession() {
+    try {
+        const { usuario } = await api('/api/auth?action=me');
+        currentUser = usuario;
+    } catch (e) {
+        currentUser = null;
+        setStatus('offline', 'Sin sesión');
+        showView('login-view');
+        return;
+    }
+    await routeAfterLogin();
+}
+
+async function routeAfterLogin() {
+    if (currentUser.rol === 'admin') {
+        setStatus('online', 'Administrador');
+        showView('admin-view');
+        if (typeof initAdmin === 'function') initAdmin();
+        return;
+    }
+    try {
+        const { conteo } = await api('/api/conteo?action=actual');
+        if (conteo) return await openCount(conteo);
+        await showSelectView();
+    } catch (e) {
+        alert(e.message);
+        showView('login-view');
+    }
+}
+
+function setupSessionListeners() {
+    $('login-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        showFormError('login-error', '');
+        const btn = e.submitter || $('login-form').querySelector('button[type=submit]');
+        btn.disabled = true;
+        try {
+            const { usuario } = await api('/api/auth?action=login', {
+                method: 'POST', body: { usuario: $('login-user').value, password: $('login-pass').value }
+            });
+            $('login-pass').value = '';
+            currentUser = usuario;
+            await routeAfterLogin();
+        } catch (err) {
+            showFormError('login-error', err.message);
+        } finally {
+            btn.disabled = false;
+        }
+    });
+
+    $('select-sucursal').addEventListener('change', loadUbicaciones);
+    $('select-ubicacion').addEventListener('change', () => { $('select-start-btn').disabled = !$('select-ubicacion').value; });
+    $('select-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        showFormError('select-error', '');
+        $('select-start-btn').disabled = true;
+        try {
+            const { conteo } = await api('/api/conteo?action=iniciar', {
+                method: 'POST', body: { ubicacion_id: Number($('select-ubicacion').value) }
+            });
+            await openCount(conteo);
+        } catch (err) {
+            showFormError('select-error', err.message);
+            $('select-start-btn').disabled = false;
+        }
+    });
+}
+
+// Pantalla "Sucursal y ubicación" (obligatoria antes de contar)
+async function showSelectView(aviso) {
+    inventory = [];
+    currentCount = null;
+    $('select-notice').textContent = aviso || '';
+    $('select-notice').hidden = !aviso;
+    showFormError('select-error', '');
+    setStatus('online', 'Listo para contar');
+    showView('select-view');
+    const { sucursales } = await api('/api/catalogo');
+    const sel = $('select-sucursal');
+    sel.replaceChildren(new Option('Seleccione una sucursal…', ''));
+    sucursales.forEach(s => sel.add(new Option(s.nombre, s.id)));
+    if (sucursales.length === 1) sel.value = String(sucursales[0].id);
+    await loadUbicaciones();
+}
+
+async function loadUbicaciones() {
+    const sel = $('select-ubicacion');
+    $('select-start-btn').disabled = true;
+    sel.replaceChildren(new Option('Seleccione una ubicación…', ''));
+    const sucId = $('select-sucursal').value;
+    sel.disabled = !sucId;
+    if (!sucId) return;
+    try {
+        const { ubicaciones } = await api('/api/catalogo?sucursal=' + encodeURIComponent(sucId));
+        ubicaciones.forEach(u => sel.add(new Option(u.nombre, u.id)));
+    } catch (err) {
+        showFormError('select-error', err.message);
+    }
+}
+
+// Descarga los artículos de la sucursal y lo ya contado, y muestra la pantalla de conteo
+async function openCount(conteo) {
+    setStatus('loading', 'Cargando artículos...');
+    showView('dashboard-view');
+    const data = await api('/api/conteo?action=articulos');
+    currentCount = data.conteo;
+    const porArticulo = new Map();
+    data.lineas.forEach(l => {
+        if (!porArticulo.has(l.articulo_id)) porArticulo.set(l.articulo_id, []);
+        porArticulo.get(l.articulo_id).push({ id: l.id, qty: l.cantidad, desc: l.detalle });
+    });
+    inventory = data.articulos.map(a => {
+        const parciales = porArticulo.get(a.id) || [];
+        const contado = parciales.length ? round2(parciales.reduce((s, p) => s + p.qty, 0)) : null;
+        const item = {
+            id: a.id, codigo: a.codigo, alterno: a.alterno || '', nombre: a.nombre,
+            costo: a.costo, existencia: a.existencia,
+            contado, partialCounts: parciales
+        };
+        return asignarImagenAutomatica(item);
+    });
+    renderLimit = RENDER_PAGE_SIZE;
+    currentFilter = 'all';
+    DOM.filterTabs.forEach(t => t.classList.toggle('active', t.dataset.filter === 'all'));
+    DOM.searchInput.value = '';
+    searchQuery = '';
+    showDashboard();
+    DOM.searchInput.focus();
+}
+
+// La sesión venció (12 h) o el administrador desactivó al usuario
+function onSessionExpired() {
+    if (!currentUser) return;
+    DOM.finishModal.classList.remove('active');
+    DOM.countingModal.classList.remove('active');
+    clearScreenData();
+    currentUser = null;
+    setStatus('offline', 'Sin sesión');
+    showView('login-view');
+    showFormError('login-error', 'Su sesión venció. Inicie sesión de nuevo; el conteo abierto se conserva.');
+}
+
+async function logout() {
+    if (currentCount && !confirm('Tiene un conteo abierto. Si sale ahora podrá retomarlo al volver a entrar.\n\n¿Cerrar sesión?')) return;
+    try { await api('/api/auth?action=logout', { method: 'POST' }); } catch (e) { /* igual se limpia la pantalla */ }
+    clearScreenData();
+    currentUser = null;
+    setStatus('offline', 'Sin sesión');
+    showView('login-view');
+}
+
+// Limpieza de pantalla: nada del conteo queda en memoria ni en el navegador
+function clearScreenData() {
+    inventory = [];
+    currentCount = null;
+    selectedItem = null;
+    DOM.itemsTableBody.innerHTML = '';
+    DOM.itemsCardsGrid.innerHTML = '';
+    DOM.searchInput.value = '';
+    searchQuery = '';
+    if (typeof clearAdminData === 'function') clearAdminData();
+}
+
+// "Finalizado Conteo": confirmación -> cierra el conteo en el servidor -> limpia la pantalla
+function openFinishModal() {
+    const contados = inventory.filter(i => i.contado !== null).length;
+    DOM.finishText.textContent = contados === 0
+        ? `No ha contado ningún artículo en ${currentCount.ubicacion}. Si finaliza, el conteo quedará vacío.`
+        : `Va a finalizar el conteo de ${currentCount.sucursal} › ${currentCount.ubicacion} con ${contados} artículo(s) contado(s). Después no podrá modificarlo.`;
+    DOM.finishModal.classList.add('active');
+    DOM.finishCancelBtn.focus();
+}
+
+function closeFinishModal() {
+    DOM.finishModal.classList.remove('active');
+}
+
+async function finishCount() {
+    DOM.finishConfirmBtn.disabled = true;
+    try {
+        const r = await api('/api/conteo?action=finalizar', { method: 'POST' });
+        closeFinishModal();
+        const lugar = `${currentCount.sucursal} › ${currentCount.ubicacion}`;
+        clearScreenData();
+        await showSelectView(`Conteo finalizado en ${lugar}: ${r.articulos_contados} artículo(s). Puede iniciar otro conteo.`);
+    } catch (e) {
+        alert(e.message);
+        closeFinishModal();
+    } finally {
+        DOM.finishConfirmBtn.disabled = false;
+    }
 }
 
 function setStatus(type, text) {
@@ -555,13 +532,11 @@ function updateStats() {
     const total = inventory.length;
     const counted = inventory.filter(item => item.contado !== null).length;
     const pending = total - counted;
-    const diff = inventory.filter(item => item.contado !== null && item.diferencias !== 0).length;
     
     // Actualizar números de Dashboard
     DOM.statTotal.textContent = total;
     DOM.statCounted.textContent = counted;
     DOM.statPending.textContent = pending;
-    DOM.statDiff.textContent = diff;
     
     // Porcentaje
     const pct = total > 0 ? Math.round((counted / total) * 100) : 0;
@@ -571,7 +546,6 @@ function updateStats() {
     DOM.badgeAll.textContent = total;
     DOM.badgePending.textContent = pending;
     DOM.badgeCounted.textContent = counted;
-    DOM.badgeDiff.textContent = diff;
 }
 
 // ----------------------------------------------------
@@ -610,7 +584,6 @@ function renderList() {
         // Filtro de pestaña
         if (currentFilter === 'pending' && item.contado !== null) return false;
         if (currentFilter === 'counted' && item.contado === null) return false;
-        if (currentFilter === 'diff' && (item.contado === null || item.diferencias === 0)) return false;
         
         // Filtro de búsqueda
         if (searchQuery) {
@@ -659,41 +632,18 @@ function createTableRow(item) {
     const tr = document.createElement('tr');
     
     // Asignar clase según estado de conteo e historial
-    if (item.contado === null) {
-        tr.className = 'row-not-counted';
-    } else if (item.diferencias === 0) {
-        tr.className = 'row-counted-no-diff';
-    } else {
-        tr.className = 'row-counted-diff';
-    }
-    
-    // Datos formateados
+    // El operador no ve diferencias: la existencia teórica es de toda la sucursal y él cuenta una sola ubicación
+    tr.className = item.contado === null ? 'row-not-counted' : 'row-counted-no-diff';
     const contadoStr = item.contado !== null ? item.contado : '-';
-    let diffStr = '-';
-    let diffClass = '';
-    
-    if (item.contado !== null) {
-        diffStr = item.diferencias;
-        if (item.diferencias > 0) {
-            diffStr = `+${item.diferencias}`;
-            diffClass = 'val-success';
-        } else if (item.diferencias < 0) {
-            diffClass = 'val-danger';
-        } else {
-            diffClass = 'val-muted';
-        }
-    }
     
     tr.innerHTML = `
         <td class="thumb-col">${thumbHtml(item, 'thumb thumb-img')}</td>
         <td><strong>${escapeHtml(item.codigo)}</strong></td>
         <td>${item.alterno ? escapeHtml(item.alterno) : '<span class="val-muted">-</span>'}</td>
         <td>${escapeHtml(item.nombre)}</td>
-        <td><span class="card-wh-badge">${escapeHtml(item.bodega || 'N/D')}</span></td>
         <td class="num-col">$${item.costo.toFixed(2)}</td>
         <td class="num-col"><strong>${item.existencia}</strong></td>
         <td class="num-col font-weight-bold" style="font-size:1.05rem;">${contadoStr}</td>
-        <td class="num-col ${diffClass}"><strong>${diffStr}</strong></td>
         <td class="action-col">
             <button type="button" class="btn btn-secondary btn-sm">
                 ${item.contado !== null ? 'Editar' : 'Contar'}
@@ -711,28 +661,9 @@ function createTableRow(item) {
 function createTableCellCard(item) {
     const card = document.createElement('div');
     
-    let borderClass = 'row-not-counted';
-    if (item.contado !== null) {
-        borderClass = item.diferencias === 0 ? 'row-counted-no-diff' : 'row-counted-diff';
-    }
-    
+    const borderClass = item.contado === null ? 'row-not-counted' : 'row-counted-no-diff';
     card.className = `card item-card ${borderClass}`;
-    
     const contadoStr = item.contado !== null ? item.contado : '-';
-    let diffStr = '-';
-    let diffClass = 'val-muted';
-    
-    if (item.contado !== null) {
-        diffStr = item.diferencias;
-        if (item.diferencias > 0) {
-            diffStr = `+${item.diferencias}`;
-            diffClass = 'val-success';
-        } else if (item.diferencias < 0) {
-            diffClass = 'val-danger';
-        } else {
-            diffClass = 'val-muted';
-        }
-    }
     
     card.innerHTML = `
         <div class="card-header-row">
@@ -742,9 +673,7 @@ function createTableCellCard(item) {
             </div>
             <div>
                 ${item.contado !== null ? 
-                  `<span class="col-tag-status ${item.diferencias === 0 ? 'col-tag-success' : 'col-tag-warning'}">
-                    ${item.diferencias === 0 ? 'Ok' : 'Diferencia'}
-                   </span>` : 
+                  '<span class="col-tag-status col-tag-success">Contado</span>' : 
                   '<span class="col-tag-status col-tag-muted">Pendiente</span>'
                 }
             </div>
@@ -754,7 +683,6 @@ function createTableCellCard(item) {
             <div class="card-name">${escapeHtml(item.nombre)}</div>
         </div>
         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
-            <span class="card-wh-badge">${escapeHtml(item.bodega || 'Bodega: N/D')}</span>
             <span class="card-wh-badge" style="background-color: rgba(59, 130, 246, 0.05); color: var(--primary); border-color: rgba(59, 130, 246, 0.15);">Costo: $${item.costo.toFixed(2)}</span>
         </div>
         <div class="card-stocks-row">
@@ -762,13 +690,9 @@ function createTableCellCard(item) {
                 <span class="card-stock-label">Exist.</span>
                 <span class="card-stock-val">${item.existencia}</span>
             </div>
-            <div class="card-stock-item" style="border-left: 1px solid var(--border-color); border-right: 1px solid var(--border-color);">
+            <div class="card-stock-item" style="border-left: 1px solid var(--border-color);">
                 <span class="card-stock-label">Contado</span>
                 <span class="card-stock-val" style="font-size:1.1rem; color:var(--primary);">${contadoStr}</span>
-            </div>
-            <div class="card-stock-item">
-                <span class="card-stock-label">Dif.</span>
-                <span class="card-stock-val ${diffClass}">${diffStr}</span>
             </div>
         </div>
     `;
@@ -790,7 +714,7 @@ function openCountingModal(item) {
     DOM.modalArticleName.textContent = selectedItem.nombre;
     DOM.modalArticleCode.textContent = selectedItem.codigo;
     DOM.modalArticleAlt.textContent = selectedItem.alterno || '-';
-    DOM.modalArticleWh.textContent = selectedItem.bodega || 'N/D';
+    DOM.modalArticleWh.textContent = currentCount ? `${currentCount.sucursal} › ${currentCount.ubicacion}` : '-';
     DOM.modalArticleCost.textContent = `$${selectedItem.costo.toFixed(2)}`;
     DOM.modalArticleExist.textContent = selectedItem.existencia;
     const modalImgUrl = imageUrlFor(selectedItem);
@@ -951,21 +875,9 @@ function calculateModalTotal() {
     
     // Guardar conteo momentáneo en el clon
     selectedItem.contado = totalCounted;
-    selectedItem.diferencias = round2(selectedItem.contado - selectedItem.existencia);
     
     // Actualizar UI del modal
     DOM.summaryTotalCounted.textContent = selectedItem.contado;
-    
-    let diffStr = selectedItem.diferencias;
-    if (selectedItem.diferencias > 0) {
-        diffStr = `+${selectedItem.diferencias}`;
-        DOM.summaryDifference.className = 'summary-value val-success';
-    } else if (selectedItem.diferencias < 0) {
-        DOM.summaryDifference.className = 'summary-value val-danger';
-    } else {
-        DOM.summaryDifference.className = 'summary-value val-muted';
-    }
-    DOM.summaryDifference.textContent = diffStr;
 }
 
 // Permite usar botones +1, +5, -10 sobre el input actual
@@ -1053,19 +965,10 @@ function renderPartialList() {
 }
 
 
-// Nombre de quien cuenta: se pregunta una vez y se recuerda en este dispositivo
-function getCounterName() {
-    let name = localStorage.getItem(STORAGE_KEYS.counter);
-    if (name === null) {
-        name = (prompt('¿Quién realiza el conteo? (nombre, opcional)') || '').trim();
-        try { localStorage.setItem(STORAGE_KEYS.counter, name); } catch (e) { /* ignorar */ }
-    }
-    return name;
-}
-
-// Guarda los datos del clon en el arreglo principal de inventario
-function saveCount() {
-    if (!selectedItem) return;
+// Guarda el conteo del artículo en el servidor y, si se guardó, actualiza la lista en pantalla
+let savingCount = false;
+async function saveCount() {
+    if (!selectedItem || savingCount) return;
     
     // No guardar si la expresión escrita es inválida o negativa
     const rawExpr = DOM.countExpression.value.trim();
@@ -1082,209 +985,38 @@ function saveCount() {
     // se sumará antes de guardar.
     calculateModalTotal();
     
-    // Buscar y actualizar el artículo real en el array
     const realIndex = inventory.findIndex(item => item.id === selectedItem.id);
-    if (realIndex !== -1) {
-        // Si no ingresó nada en expresión ni tiene parciales, mantener en pendiente (null)
-        // a menos que explícitamente se presione guardar en 0.
-        // Pero si escribió algo o hay parciales, registramos el conteo.
-        const hasInput = DOM.countExpression.value.trim() !== '';
-        const hasPartials = selectedItem.partialCounts.length > 0;
-        
-        if (!hasInput && !hasPartials && selectedItem.contado === 0) {
-            // Guardar como no contado (pendiente) si todo está en blanco
-            inventory[realIndex].contado = null;
-            inventory[realIndex].diferencias = null;
-            inventory[realIndex].partialCounts = [];
-            inventory[realIndex].fechaConteo = null;
-            inventory[realIndex].contador = null;
-        } else {
-            inventory[realIndex].contado = selectedItem.contado;
-            inventory[realIndex].diferencias = selectedItem.diferencias;
-            inventory[realIndex].partialCounts = selectedItem.partialCounts;
-            inventory[realIndex].fechaConteo = new Date().toISOString();
-            inventory[realIndex].contador = getCounterName();
-        }
-        
-        saveToLocalStorage();
-        updateStats();
-        renderList();
-    }
-    
-    closeCountingModal();
-}
+    if (realIndex === -1) return closeCountingModal();
 
-// ----------------------------------------------------
-// 8. ACCIONES: LIMPIAR, NUEVO Y PLANTILLA EXCEL
-// ----------------------------------------------------
-function confirmClearCounts() {
-    if (confirm("¿Está seguro de que desea limpiar todos los conteos registrados?\n\nSe descargará una copia de respaldo en Excel antes de borrar.")) {
-        if (inventory.some(item => item.contado !== null)) {
-            downloadResults('respaldo_antes_de_limpiar');
-        }
-        inventory.forEach(item => {
-            item.contado = null;
-            item.diferencias = null;
-            item.partialCounts = [];
-            item.fechaConteo = null;
-            item.contador = null;
+    // Líneas a guardar: los parciales agregados + lo escrito en el campo principal (si escribió algo, incluso 0).
+    // Sin nada escrito ni parciales, el artículo queda pendiente (sin líneas).
+    const hasInput = rawExpr !== '';
+    const lineas = selectedItem.partialCounts.map(p => ({ cantidad: p.qty, detalle: p.desc }));
+    if (hasInput) lineas.push({ cantidad: round2(safeEvaluate(rawExpr)), detalle: 'Directo' });
+
+    savingCount = true;
+    DOM.modalSaveBtn.disabled = true;
+    try {
+        const r = await api('/api/conteo?action=guardar', {
+            method: 'POST', body: { articulo_id: selectedItem.id, parciales: lineas }
         });
-        saveToLocalStorage();
+        const item = inventory[realIndex];
+        item.partialCounts = r.lineas.map(l => ({ id: l.id, qty: l.cantidad, desc: l.detalle }));
+        item.contado = item.partialCounts.length
+            ? round2(item.partialCounts.reduce((s, p) => s + p.qty, 0))
+            : null;
         updateStats();
         renderList();
+        closeCountingModal();
+    } catch (e) {
+        // No se cierra el modal: lo escrito no se pierde y puede reintentar
+        alert('No se pudo guardar el conteo: ' + e.message);
+    } finally {
+        savingCount = false;
+        DOM.modalSaveBtn.disabled = false;
     }
 }
 
-function confirmLoadNewFile() {
-    if (confirm("¿Desea cargar un nuevo archivo?\n\nSe descargará una copia de respaldo en Excel del avance actual antes de continuar.")) {
-        if (inventory.some(item => item.contado !== null)) {
-            downloadResults('respaldo_antes_de_cargar_nuevo');
-        }
-        localStorage.removeItem(STORAGE_KEYS.inventory);
-        localStorage.removeItem(STORAGE_KEYS.fileName);
-        inventory = [];
-        fileName = 'inventario.xlsx';
-        DOM.excelFileInput.value = '';
-        showUploadView();
-    }
-}
-
-// Genera un archivo Excel vacío de ejemplo (Plantilla)
-function downloadTemplate() {
-    const templateData = [
-        {
-            "codigo": "ART001",
-            "alterno": "ALT101",
-            "nombre": "TORNILLO ACERO 1/2 PULGADA",
-            "bodega": "Bodega Principal",
-            "costo": 0.15,
-            "existencia": 150
-        },
-        {
-            "codigo": "ART002",
-            "alterno": "",
-            "nombre": "TUERCA ZINCADA 1/2 PULGADA",
-            "bodega": "Bodega Principal",
-            "costo": 0.08,
-            "existencia": 200
-        },
-        {
-            "codigo": "ART003",
-            "alterno": "ALT103",
-            "nombre": "ARANDELA PRESION 1/2 PULGADA",
-            "bodega": "Bodega Sucursal",
-            "costo": 0.05,
-            "existencia": 50
-        }
-    ];
-
-    const worksheet = XLSX.utils.json_to_sheet(templateData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Plantilla Inventario");
-    
-    // Auto-ajuste de columnas básico
-    worksheet["!cols"] = [
-        { wch: 12 }, // codigo
-        { wch: 12 }, // alterno
-        { wch: 35 }, // nombre
-        { wch: 18 }, // bodega
-        { wch: 10 }, // costo
-        { wch: 12 }  // existencia
-    ];
-
-    XLSX.writeFile(workbook, "plantilla_inventario.xlsx");
-}
-
-// Exporta el inventario con los conteos y diferencias a un nuevo Excel
-function buildResultsWorkbook(filePrefix) {
-    
-    // Estructurar los datos exactos que requiere el usuario
-    const exportData = inventory.map(item => ({
-        "codigo": item.codigo,
-        "alterno": item.alterno,
-        "nombre": item.nombre,
-        "bodega": item.bodega,
-        "costo": item.costo,
-        "existencia": item.existencia,
-        "contado": item.contado !== null ? item.contado : "",
-        "diferencias": item.diferencias !== null ? item.diferencias : "",
-        "detalle_parciales": (item.partialCounts || []).map(p => `${p.qty} (${p.desc})`).join('; '),
-        "contador": item.contador || "",
-        "fecha_conteo": item.fechaConteo ? new Date(item.fechaConteo).toLocaleString('es') : ""
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Resultados Inventario");
-    
-    // Auto-ajustar anchos de columnas
-    worksheet["!cols"] = [
-        { wch: 14 }, // codigo
-        { wch: 14 }, // alterno
-        { wch: 40 }, // nombre
-        { wch: 20 }, // bodega
-        { wch: 10 }, // costo
-        { wch: 12 }, // existencia
-        { wch: 12 }, // contado
-        { wch: 12 }, // diferencias
-        { wch: 40 }, // detalle_parciales
-        { wch: 16 }, // contador
-        { wch: 20 }  // fecha_conteo
-    ];
-
-    // Obtener fecha actual para el nombre del archivo
-    const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10);
-    const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
-    const finalFileName = `${filePrefix}_${dateStr}_${timeStr}.xlsx`;
-
-    return { workbook, finalFileName };
-}
-
-// Descarga el Excel con los conteos
-function downloadResults(filePrefix) {
-    if (typeof filePrefix !== 'string') filePrefix = 'conteo_inventario'; // al usarse como handler de click llega un evento
-    if (inventory.length === 0) {
-        alert("No hay datos para descargar.");
-        return;
-    }
-    const { workbook, finalFileName } = buildResultsWorkbook(filePrefix);
-    XLSX.writeFile(workbook, finalFileName);
-    setStatus('saved', 'Resultados Descargados');
-}
-
-// Envía el Excel por WhatsApp. En el móvil abre el menú de compartir (WhatsApp aparece en la lista),
-// porque WhatsApp no permite adjuntar un archivo desde un enlace: el archivo debe compartirse.
-async function shareResultsWhatsApp() {
-    if (inventory.length === 0) {
-        alert('No hay datos para enviar.');
-        return;
-    }
-    const { workbook, finalFileName } = buildResultsWorkbook('conteo_inventario');
-    const bytes = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-    const mime = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    const file = new File([bytes], finalFileName, { type: mime });
-    const text = 'Conteo físico: ' + fileName;
-
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try {
-            await navigator.share({ files: [file], title: finalFileName, text });
-            setStatus('saved', 'Archivo compartido');
-        } catch (e) {
-            if (e.name !== 'AbortError') {
-                console.error('No se pudo compartir:', e);
-                alert('No se pudo abrir el menú de compartir. Se descargará el archivo.');
-                XLSX.writeFile(workbook, finalFileName);
-            }
-        }
-        return;
-    }
-
-    // Navegador sin compartir archivos (p. ej. PC): descarga el Excel y abre WhatsApp para adjuntarlo
-    XLSX.writeFile(workbook, finalFileName);
-    alert('Este dispositivo no permite compartir archivos directamente.\nSe descargó el Excel; se abrirá WhatsApp para que lo adjunte.');
-    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
-}
 
 // ----------------------------------------------------
 // 9. EVENTOS DE INICIO

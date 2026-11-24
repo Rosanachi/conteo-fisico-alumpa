@@ -10,8 +10,6 @@
     <link rel="apple-touch-icon" href="icon.svg">
     <link rel="preload" href="fonts/outfit-400.ttf" as="font" type="font/ttf" crossorigin>
     <link rel="stylesheet" href="style.css">
-    <!-- SheetJS (Offline local copy) -->
-    <script src="lib/xlsx.full.min.js"></script>
 </head>
 <body>
     <div class="app-container">
@@ -25,10 +23,14 @@
                 </svg>
                 <div class="logo-text">
                     <h1>Inventario<span>Físico</span></h1>
-                    <span class="app-version">v2.0 Offline</span>
+                    <span class="app-version">v3.0 Multiusuario</span>
                 </div>
             </div>
             <div class="header-status">
+                <div id="user-chip" class="user-chip" hidden>
+                    <span id="user-name" class="user-name"></span>
+                    <button id="logout-btn" class="btn btn-secondary btn-sm" type="button">Salir</button>
+                </div>
                 <div id="status-indicator" class="status-badge status-offline">
                     <span class="status-dot"></span>
                     <span id="status-text">Sin Archivo</span>
@@ -36,43 +38,74 @@
             </div>
         </header>
 
-        <!-- PANTALLA 1: CARGA DE ARCHIVO -->
-        <main id="upload-view" class="view-panel active-view">
-            <div class="upload-card card">
+        <!-- PANTALLA: INICIO DE SESIÓN -->
+        <main id="login-view" class="view-panel active-view">
+            <form id="login-form" class="upload-card card auth-card" autocomplete="on">
                 <div class="card-glow"></div>
-                <div class="upload-icon-wrapper">
-                    <svg viewBox="0 0 24 24" class="upload-icon" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="17 8 12 3 7 8"></polyline>
-                        <line x1="12" y1="3" x2="12" y2="15"></line>
-                    </svg>
+                <h2>Iniciar sesión</h2>
+                <div class="input-group">
+                    <label for="login-user">Usuario</label>
+                    <input id="login-user" class="text-input" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
                 </div>
-                <h2>Cargar Catálogo de Artículos</h2>
-                <p class="upload-hint">Arrastre su archivo Excel (.xlsx, .xls) aquí o haga clic para buscar en su dispositivo.</p>
-                
-                <div class="file-input-wrapper">
-                    <button id="select-file-btn" class="btn btn-primary btn-large" type="button">
-                        Seleccionar Archivo Excel
-                    </button>
-                    <input type="file" id="excel-file-input" accept=".xlsx, .xls" style="display: none;">
+                <div class="input-group">
+                    <label for="login-pass">Contraseña</label>
+                    <input id="login-pass" class="text-input" type="password" autocomplete="current-password" required>
                 </div>
+                <p id="login-error" class="form-error" role="alert" hidden></p>
+                <button class="btn btn-primary btn-large" type="submit">Entrar</button>
+            </form>
+        </main>
 
-                <div class="upload-divider">
-                    <span>O</span>
+        <!-- PANTALLA: SUCURSAL Y UBICACIÓN (obligatoria antes de contar) -->
+        <main id="select-view" class="view-panel">
+            <form id="select-form" class="upload-card card auth-card">
+                <div class="card-glow"></div>
+                <h2>Iniciar conteo</h2>
+                <p id="select-notice" class="form-ok" role="status" hidden></p>
+                <div class="input-group">
+                    <label for="select-sucursal">Sucursal</label>
+                    <select id="select-sucursal" class="text-input"></select>
                 </div>
+                <div class="input-group">
+                    <label for="select-ubicacion">Ubicación</label>
+                    <select id="select-ubicacion" class="text-input" disabled></select>
+                </div>
+                <p id="select-error" class="form-error" role="alert" hidden></p>
+                <button id="select-start-btn" class="btn btn-primary btn-large" type="submit" disabled>Comenzar conteo</button>
+            </form>
+        </main>
 
-                <div class="template-section">
-                    <p>¿No tiene un archivo listo? Descargue una plantilla de ejemplo.</p>
-                    <button id="download-template-btn" class="btn btn-secondary">
-                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                            <polyline points="7 10 12 15 17 10"></polyline>
-                            <line x1="12" y1="15" x2="12" y2="3"></line>
-                        </svg>
-                        Descargar Plantilla Excel
-                    </button>
+        <!-- PANTALLA: ADMINISTRACIÓN -->
+        <main id="admin-view" class="view-panel">
+            <section class="card admin-card">
+                <h2>Inventario por sucursal</h2>
+                <div id="inv-resumen" class="admin-resumen"></div>
+                <p class="upload-hint">Suba un Excel consolidado con las columnas: Código, Alterno, Nombre, Sucursal, Costo, Existencia. Si el código ya existe en esa sucursal, se actualiza.</p>
+                <input type="file" id="inv-file" accept=".xlsx,.xls" hidden>
+                <div class="admin-actions">
+                    <button id="inv-select-btn" class="btn btn-primary" type="button">Seleccionar Excel</button>
+                    <button id="inv-template-btn" class="btn btn-secondary" type="button">Descargar plantilla</button>
                 </div>
-            </div>
+                <p id="inv-progress" class="form-ok" role="status" hidden></p>
+                <div id="inv-result" class="admin-result" hidden></div>
+            </section>
+
+            <section class="card admin-card">
+                <h2>Usuarios</h2>
+                <form id="user-form" class="admin-form">
+                    <input id="user-usuario" class="text-input" type="text" placeholder="Usuario" aria-label="Usuario" autocapitalize="none" autocomplete="off" required>
+                    <input id="user-nombre" class="text-input" type="text" placeholder="Nombre completo" aria-label="Nombre completo" autocomplete="off" required>
+                    <input id="user-pass" class="text-input" type="password" placeholder="Contraseña (mín. 8)" aria-label="Contraseña" autocomplete="new-password" minlength="8" required>
+                    <select id="user-rol" class="text-input" aria-label="Rol">
+                        <option value="operador">Operador</option>
+                        <option value="admin">Administrador</option>
+                    </select>
+                    <select id="user-sucursal" class="text-input" aria-label="Sucursal fija del operador"></select>
+                    <button class="btn btn-primary" type="submit">Crear usuario</button>
+                </form>
+                <p id="user-msg" class="form-ok" role="status"></p>
+                <div id="user-list" class="table-responsive-wrapper user-list-wrap"></div>
+            </section>
         </main>
 
         <!-- PANTALLA 2: CONTROL DE CONTEO Y BÚSQUEDA -->
@@ -107,39 +140,18 @@
                         <span id="stat-pending" class="stat-value">0</span>
                     </div>
                 </div>
-                <div class="stat-card card">
-                    <div class="stat-icon-wrapper color-danger">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"></polygon><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
-                    </div>
-                    <div class="stat-info">
-                        <span class="stat-label">Con Diferencias</span>
-                        <span id="stat-diff" class="stat-value">0</span>
-                    </div>
-                </div>
             </section>
 
             <!-- ACCIONES DEL ARCHIVO -->
             <div class="actions-toolbar">
                 <div class="file-meta">
                     <svg viewBox="0 0 24 24" class="meta-file-icon" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
-                    <span id="loaded-file-name" class="file-name">archivo.xlsx</span>
+                    <span id="loaded-file-name" class="file-name">Sucursal › Ubicación</span>
                 </div>
                 <div class="action-buttons">
-                    <button id="download-results-btn" class="btn btn-success">
-                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                        <span>Descargar Excel</span>
-                    </button>
-                    <button id="share-whatsapp-btn" class="btn btn-success" type="button">
-                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.4 8.4 0 0 1-12.4 7.4L3 21l2.2-5.4A8.4 8.4 0 1 1 21 11.5z"></path></svg>
-                        <span>Enviar por WhatsApp</span>
-                    </button>
-                    <button id="clear-counts-btn" class="btn btn-danger-outline">
-                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
-                        <span>Limpiar Conteos</span>
-                    </button>
-                    <button id="load-new-file-btn" class="btn btn-secondary">
-                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                        <span>Cargar Nuevo</span>
+                    <button id="finish-count-btn" class="btn btn-success btn-large" type="button">
+                        <svg viewBox="0 0 24 24" class="btn-icon" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                        <span>Finalizado Conteo</span>
                     </button>
                 </div>
             </div>
@@ -160,7 +172,6 @@
                     <button class="filter-tab active" data-filter="all">Todos <span class="badge" id="badge-all">0</span></button>
                     <button class="filter-tab" data-filter="pending">Pendientes <span class="badge" id="badge-pending">0</span></button>
                     <button class="filter-tab" data-filter="counted">Contados <span class="badge" id="badge-counted">0</span></button>
-                    <button class="filter-tab" data-filter="diff">Con Diferencia <span class="badge" id="badge-diff">0</span></button>
                 </div>
 
                 <!-- Contenedor del listado (Vista dual: Tabla para PC, Tarjetas para móvil) -->
@@ -174,11 +185,9 @@
                                 <th>Código</th>
                                     <th>Alterno</th>
                                     <th>Nombre del Artículo</th>
-                                    <th>Bodega</th>
                                     <th class="num-col">Costo</th>
                                     <th class="num-col">Existencia</th>
                                     <th class="num-col">Contado</th>
-                                    <th class="num-col">Diferencia</th>
                                     <th class="action-col">Acción</th>
                                 </tr>
                             </thead>
@@ -233,7 +242,7 @@
                             <span id="modal-article-alt" class="detail-val">ALT-9876</span>
                         </div>
                         <div class="detail-item">
-                            <span class="detail-label">Bodega</span>
+                            <span class="detail-label">Ubicación</span>
                             <span id="modal-article-wh" class="detail-val">Bodega Principal</span>
                         </div>
                         <div class="detail-item">
@@ -320,10 +329,7 @@
                             <span class="summary-label">Total Contado</span>
                             <span id="summary-total-counted" class="summary-value">0</span>
                         </div>
-                        <div class="summary-item">
-                            <span class="summary-label">Diferencia</span>
-                            <span id="summary-difference" class="summary-value">0</span>
-                        </div>
+    
                     </div>
                 </div>
             </div>
@@ -336,7 +342,25 @@
         </div>
     </div>
 
-    <!-- Script de la aplicación -->
+    <!-- CONFIRMACIÓN: FINALIZADO CONTEO -->
+    <div id="finish-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="finish-title">
+        <div class="modal-container finish-container">
+            <div class="modal-header">
+                <h3 id="finish-title">¿Finalizar el conteo?</h3>
+            </div>
+            <div class="modal-body">
+                <p id="finish-text" class="finish-text"></p>
+            </div>
+            <div class="modal-footer">
+                <button id="finish-cancel-btn" class="btn btn-secondary" type="button">Seguir contando</button>
+                <button id="finish-confirm-btn" class="btn btn-success" type="button">Sí, finalizar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts de la aplicación -->
+    <script src="api.js"></script>
+    <script src="admin.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
