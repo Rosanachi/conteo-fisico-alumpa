@@ -4,3 +4,5 @@ node_modules/
 .env
 .env.*
 prompt*.docx
+# Excel descargados de la app (datos reales, no se suben)
+/*.xlsx
