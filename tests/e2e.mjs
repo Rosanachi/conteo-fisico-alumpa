@@ -196,8 +196,10 @@ T('se restablece a 7 para el resto de la prueba', (await totalBase()).s === 7);
 // Historial en la ventana: 4 guardados (7, 10, 0, 7); el vacío y el rechazado no cuentan
 await pg1.click('#items-table-body tr');
 await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
-const hist = await pg1.$$eval('#history-list li', l => l.map(x => x.querySelector('.history-qty').textContent + (x.querySelector('.history-tag') ? '*' : '')));
-T('historial: lista las 4 veces, la más reciente arriba y marcada como vigente', hist.join(',') === '7*,0,10,7', hist.join(','));
+const hist = await pg1.$$eval('#history-list li', l => l.map(x => x.querySelector('.history-qty').textContent));
+T('historial: muestra la cantidad colocada cada vez (+7, +3, -10, +7), la más reciente arriba', hist.join(',') === '+7,-10,+3,+7', hist.join(','));
+T('historial: no muestra los totales ni la marca vigente', !hist.includes('10') && !hist.includes('0') && (await pg1.$('.history-tag')) === null);
+T('historial: las restas se destacan en rojo', await pg1.$$eval('#history-list .history-neg', e => e.map(x => x.textContent).join()) === '-10');
 T('historial: el título indica el número de veces', /Veces contado en este conteo: 4/.test(await texto('#history-title')), await texto('#history-title'));
 await pg1.screenshot({ path: 'E:/KIRO/tools-conteo/modal_historial.png' });
 T('historial: cada vez muestra la hora', await pg1.$$eval('#history-list .history-time', t => t.every(x => /^\d{1,2}:\d{2}/.test(x.textContent.trim()))));

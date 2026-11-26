@@ -732,22 +732,24 @@ function renderHistory(item) {
     }
     DOM.historyEmpty.hidden = true;
     DOM.historyTitle.textContent = `Veces contado en este conteo: ${registros.length}`;
-    registros.slice().reverse().forEach((h, i) => {
+    // El historial guarda el total de cada guardado; la cantidad colocada es la diferencia con el total anterior
+    let anterior = 0;
+    const filas = registros.map(h => {
+        if (h.cantidad === null) { anterior = 0; return { creado: h.creado, texto: 'Dejado pendiente', signo: '' }; }
+        const colocada = round2(h.cantidad - anterior);
+        anterior = h.cantidad;
+        return { creado: h.creado, texto: colocada > 0 ? `+${colocada}` : String(colocada), signo: colocada < 0 ? 'neg' : 'pos' };
+    });
+    filas.reverse().forEach((f, i) => {
         const li = document.createElement('li');
         li.className = 'history-item' + (i === 0 ? ' history-current' : '');
         const hora = document.createElement('span');
         hora.className = 'history-time';
-        hora.textContent = formatHistoryTime(h.creado);
+        hora.textContent = formatHistoryTime(f.creado);
         const valor = document.createElement('span');
-        valor.className = 'history-qty';
-        valor.textContent = h.cantidad === null ? 'Dejado pendiente' : String(h.cantidad);
+        valor.className = 'history-qty' + (f.signo === 'neg' ? ' history-neg' : '');
+        valor.textContent = f.texto;
         li.append(hora, valor);
-        if (i === 0) {
-            const tag = document.createElement('span');
-            tag.className = 'history-tag';
-            tag.textContent = 'vigente';
-            li.append(tag);
-        }
         DOM.historyList.append(li);
     });
 }

@@ -1329,3 +1329,5 @@ body {
 
 /* Cantidad ya guardada (el campo suma o resta sobre ella) */
 .count-base { margin: 0; font-size: .9rem; color: var(--primary); font-weight: 600; }
+
+.history-neg { color: var(--danger); }

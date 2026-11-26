@@ -1,6 +1,6 @@
 // Service worker: guarda la app en caché para que abra sin conexión.
 // Cambie CACHE_VERSION cada vez que publique cambios en los archivos.
-const CACHE_VERSION = 'v11';
+const CACHE_VERSION = 'v12';
 const CACHE_NAME = `inventario-${CACHE_VERSION}`;
 // Caché aparte para las imágenes del catálogo (cache-first, se llena bajo demanda; no se borra al cambiar de versión)
 const IMG_CACHE = 'inventario-img-v1';
