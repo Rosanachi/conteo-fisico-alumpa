@@ -1312,3 +1312,17 @@ body {
 /* Conteos en curso con botón Borrar */
 .open-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .open-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+/* Historial de veces contado (conteo actual) */
+.count-history { background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 12px 14px; }
+.count-history h5 { margin: 0 0 8px; font-size: .85rem; font-weight: 600; color: var(--text-secondary); }
+.history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow-y: auto; }
+.history-item { display: flex; align-items: center; gap: 12px; padding: 6px 8px; border-radius: 6px; font-size: .9rem; }
+.history-current { background: rgba(59, 130, 246, 0.08); }
+.history-time { color: var(--text-muted); min-width: 92px; font-variant-numeric: tabular-nums; }
+.history-qty { font-weight: 600; font-variant-numeric: tabular-nums; }
+.history-tag { margin-left: auto; font-size: .75rem; color: var(--primary); }
+.history-empty { margin: 0; color: var(--text-muted); font-size: .85rem; }
+/* El total ocupa todo el recuadro (ya no hay columna de diferencia) */
+.calculation-summary { grid-template-columns: 1fr; }
+.calculation-summary .summary-item:first-child { border-right: none; }

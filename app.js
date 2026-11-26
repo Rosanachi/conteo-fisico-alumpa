@@ -156,7 +156,10 @@ const DOM = {
     countExpression: document.getElementById('count-expression'),
     expressionPreview: document.getElementById('expression-preview'),
     quickAdjustButtons: document.querySelectorAll('.btn-adjust'),
-    summaryTotalCounted: document.getElementById('summary-total-counted')
+    summaryTotalCounted: document.getElementById('summary-total-counted'),
+    historyTitle: document.getElementById('history-title'),
+    historyList: document.getElementById('history-list'),
+    historyEmpty: document.getElementById('history-empty')
 };
 
 // ----------------------------------------------------
@@ -418,13 +421,19 @@ async function openCount(conteo) {
         if (!porArticulo.has(l.articulo_id)) porArticulo.set(l.articulo_id, []);
         porArticulo.get(l.articulo_id).push({ id: l.id, qty: l.cantidad, desc: l.detalle });
     });
+    const historialPorArticulo = new Map();
+    (data.historial || []).forEach(h => {
+        if (!historialPorArticulo.has(h.articulo_id)) historialPorArticulo.set(h.articulo_id, []);
+        historialPorArticulo.get(h.articulo_id).push({ cantidad: h.cantidad, creado: h.creado });
+    });
     inventory = data.articulos.map(a => {
         const parciales = porArticulo.get(a.id) || [];
         const contado = parciales.length ? round2(parciales.reduce((s, p) => s + p.qty, 0)) : null;
         const item = {
             id: a.id, codigo: a.codigo, alterno: a.alterno || '', nombre: a.nombre,
             costo: a.costo, existencia: a.existencia,
-            contado, partialCounts: parciales
+            contado, partialCounts: parciales,
+            historial: historialPorArticulo.get(a.id) || []
         };
         return asignarImagenAutomatica(item);
     });
@@ -697,6 +706,51 @@ function createTableCellCard(item) {
 // ----------------------------------------------------
 // 7. LÓGICA DEL MODAL DE CONTEO Y HISTORIAL
 // ----------------------------------------------------
+// Lista de las veces que se guardó este artículo en el conteo actual (la más reciente arriba)
+function formatHistoryTime(iso) {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    const hora = d.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+    const hoy = new Date();
+    return d.toDateString() === hoy.toDateString()
+        ? hora
+        : `${d.toLocaleDateString('es', { day: '2-digit', month: '2-digit' })} ${hora}`;
+}
+
+function renderHistory(item) {
+    const registros = item.historial || [];
+    DOM.historyList.replaceChildren();
+    if (!registros.length) {
+        DOM.historyTitle.textContent = 'Veces contado en este conteo';
+        // Contado antes de que existiera el historial: se muestra el valor vigente
+        DOM.historyEmpty.textContent = item.contado !== null
+            ? `Contado: ${item.contado} (registrado antes de activar el historial).`
+            : 'Todavía no se ha contado en este conteo.';
+        DOM.historyEmpty.hidden = false;
+        return;
+    }
+    DOM.historyEmpty.hidden = true;
+    DOM.historyTitle.textContent = `Veces contado en este conteo: ${registros.length}`;
+    registros.slice().reverse().forEach((h, i) => {
+        const li = document.createElement('li');
+        li.className = 'history-item' + (i === 0 ? ' history-current' : '');
+        const hora = document.createElement('span');
+        hora.className = 'history-time';
+        hora.textContent = formatHistoryTime(h.creado);
+        const valor = document.createElement('span');
+        valor.className = 'history-qty';
+        valor.textContent = h.cantidad === null ? 'Dejado pendiente' : String(h.cantidad);
+        li.append(hora, valor);
+        if (i === 0) {
+            const tag = document.createElement('span');
+            tag.className = 'history-tag';
+            tag.textContent = 'vigente';
+            li.append(tag);
+        }
+        DOM.historyList.append(li);
+    });
+}
+
 function openCountingModal(item) {
     // Clonar para poder cancelar cambios
     selectedItem = JSON.parse(JSON.stringify(item));
@@ -720,6 +774,7 @@ function openCountingModal(item) {
     // Campo de cantidad: si ya se contó, muestra lo contado para corregirlo o sumarle (ej. 7+3)
     DOM.countExpression.value = selectedItem.contado !== null ? String(selectedItem.contado) : '';
     DOM.expressionPreview.style.display = 'none';
+    renderHistory(selectedItem);
     
     // Calcular totales del modal
     calculateModalTotal();
@@ -921,6 +976,7 @@ async function saveCount() {
         });
         const item = inventory[realIndex];
         item.partialCounts = r.lineas.map(l => ({ id: l.id, qty: l.cantidad, desc: l.detalle }));
+        item.historial = r.historial || item.historial || [];
         item.contado = item.partialCounts.length
             ? round2(item.partialCounts.reduce((s, p) => s + p.qty, 0))
             : null;

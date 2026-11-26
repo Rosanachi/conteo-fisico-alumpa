@@ -125,6 +125,8 @@ await pg1.type('#search-input', 'PAANG00830BLS19');
 await pg1.keyboard.press('Enter');
 T('Enter con código exacto abre el modal', await esperar(() => document.getElementById('counting-modal').classList.contains('active')));
 T('el modal no muestra diferencia', (await pg1.$('#summary-difference')) === null);
+T('historial: un artículo sin contar dice que aún no se ha contado', await vis('#history-empty') && /Todavía no se ha contado/.test(await texto('#history-empty')) &&
+  (await pg1.$$eval('#history-list li', l => l.length)) === 0);
 await pg1.type('#count-expression', '3+4');
 await pg1.click('#modal-save-btn');
 T('guardar cierra el modal', await esperar(() => !document.getElementById('counting-modal').classList.contains('active')));
@@ -159,6 +161,26 @@ await pg1.type('#count-expression', '7');
 await pg1.click('#modal-save-btn');
 await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
 T('se restablece a 7 para el resto de la prueba', (await pg.query('SELECT sum(cantidad)::float8 s FROM conteo_lineas')).rows[0].s === 7);
+
+// Historial en la ventana: 3 guardados (7, 10, 7); el intento cancelado no cuenta
+await pg1.click('#items-table-body tr');
+await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
+const hist = await pg1.$$eval('#history-list li', l => l.map(x => x.querySelector('.history-qty').textContent + (x.querySelector('.history-tag') ? '*' : '')));
+T('historial: lista las 3 veces, la más reciente arriba y marcada como vigente', hist.join(',') === '7*,10,7', hist.join(','));
+T('historial: el título indica el número de veces', /Veces contado en este conteo: 3/.test(await texto('#history-title')), await texto('#history-title'));
+await pg1.screenshot({ path: 'E:/KIRO/tools-conteo/modal_historial.png' });
+T('historial: cada vez muestra la hora', await pg1.$$eval('#history-list .history-time', t => t.every(x => /^\d{1,2}:\d{2}/.test(x.textContent.trim()))));
+await pg1.click('#modal-cancel-btn');
+await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
+await pg1.reload({ waitUntil: 'networkidle0' });
+await esperar(() => document.querySelectorAll('#items-table-body tr').length > 0);
+await pg1.type('#search-input', 'PAANG00830BLS19');
+await pg1.keyboard.press('Enter');
+await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
+T('historial: se conserva al recargar la página', (await pg1.$$eval('#history-list li', l => l.length)) === 3);
+await pg1.click('#modal-cancel-btn');
+await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
+await pg1.$eval('#search-input', e => { e.value = ''; e.dispatchEvent(new Event('input')); });
 
 // Recargar: el conteo abierto se retoma
 await pg1.reload({ waitUntil: 'networkidle0' });

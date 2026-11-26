@@ -1,5 +1,20 @@
 // Esquema PostgreSQL. Cada sentencia es idempotente (se puede ejecutar varias veces).
-module.exports = [
+
+// Historial de cada guardado dentro de un conteo (solo se agregan filas).
+// cantidad NULL = el operador dejó el artículo pendiente.
+// Se agregó después de la instalación inicial: también se crea automáticamente (ver migraciones.js).
+const HISTORIAL = [
+  `CREATE TABLE IF NOT EXISTS conteo_historial (
+     id BIGSERIAL PRIMARY KEY,
+     conteo_id BIGINT NOT NULL REFERENCES conteos(id),
+     articulo_id BIGINT NOT NULL REFERENCES articulos(id),
+     cantidad NUMERIC(14,2),
+     creado TIMESTAMPTZ NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS conteo_historial_conteo ON conteo_historial (conteo_id, articulo_id, id)`
+];
+
+const BASE = [
   `CREATE TABLE IF NOT EXISTS sucursales (
      id SERIAL PRIMARY KEY,
      nombre TEXT NOT NULL UNIQUE
@@ -59,3 +74,6 @@ module.exports = [
   `CREATE INDEX IF NOT EXISTS conteo_lineas_conteo ON conteo_lineas (conteo_id, articulo_id)`,
   `CREATE INDEX IF NOT EXISTS articulos_alterno ON articulos (sucursal_id, alterno)`
 ];
+
+module.exports = [...BASE, ...HISTORIAL];
+module.exports.HISTORIAL = HISTORIAL;

@@ -6,7 +6,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node tests/run.mjs && node tests/etapa2.mjs && node tests/etapa3.mjs && node tests/borrar.mjs && node tests/e2e.mjs"
+    "test": "node tests/run.mjs && node tests/etapa2.mjs && node tests/etapa3.mjs && node tests/borrar.mjs && node tests/historial.mjs && node tests/e2e.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.1",

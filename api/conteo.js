@@ -7,6 +7,7 @@
 const { query } = require('./_lib/db');
 const { send, readJson, handler, httpError } = require('./_lib/http');
 const { requireUser } = require('./_lib/auth');
+const { asegurarHistorial } = require('./_lib/migraciones');
 
 const MAX_PARCIALES = 200;
 
@@ -29,6 +30,7 @@ function entero(v, mensaje) {
 module.exports = handler(async (req, res) => {
   const user = await requireUser(req);
   const action = new URL(req.url, 'http://x').searchParams.get('action');
+  if (action === 'articulos' || action === 'guardar') await asegurarHistorial();
 
   if (action === 'actual' && req.method === 'GET') {
     return send(res, 200, { conteo: await conteoAbierto(user.id) });
@@ -66,7 +68,10 @@ module.exports = handler(async (req, res) => {
     const lineas = await query(
       `SELECT id, articulo_id, cantidad::float8 AS cantidad, detalle
          FROM conteo_lineas WHERE conteo_id = $1 ORDER BY id`, [conteo.id]);
-    return send(res, 200, { conteo, articulos, lineas });
+    const historial = await query(
+      `SELECT articulo_id, cantidad::float8 AS cantidad, creado
+         FROM conteo_historial WHERE conteo_id = $1 ORDER BY id`, [conteo.id]);
+    return send(res, 200, { conteo, articulos, lineas, historial });
   }
 
   if (action === 'guardar' && req.method === 'POST') {
@@ -95,6 +100,11 @@ module.exports = handler(async (req, res) => {
          INSERT INTO conteo_lineas (conteo_id, articulo_id, cantidad, detalle)
          SELECT c.id, a.id, t.q, t.d FROM c, a, unnest($4::numeric[], $5::text[]) AS t(q, d)
          RETURNING id, cantidad::float8 AS cantidad, detalle
+       ), hist AS (
+         -- Cada guardado queda en el historial con el total (NULL si se dejó pendiente)
+         INSERT INTO conteo_historial (conteo_id, articulo_id, cantidad)
+         SELECT c.id, a.id, (SELECT sum(t.q) FROM unnest($4::numeric[]) AS t(q)) FROM c, a
+         RETURNING 1
        )
        SELECT (SELECT count(*) FROM c)::int AS conteo_ok,
               (SELECT count(*) FROM a)::int AS articulo_ok,
@@ -102,7 +112,10 @@ module.exports = handler(async (req, res) => {
       [conteo.id, user.id, articuloId, cantidades, detalles]);
     if (!r.conteo_ok) throw httpError(409, 'El conteo ya fue finalizado');
     if (!r.articulo_ok) throw httpError(404, 'El artículo no pertenece a esta sucursal');
-    return send(res, 200, { lineas: typeof r.lineas === 'string' ? JSON.parse(r.lineas) : r.lineas });
+    const historial = await query(
+      `SELECT cantidad::float8 AS cantidad, creado FROM conteo_historial
+        WHERE conteo_id = $1 AND articulo_id = $2 ORDER BY id`, [conteo.id, articuloId]);
+    return send(res, 200, { lineas: typeof r.lineas === 'string' ? JSON.parse(r.lineas) : r.lineas, historial });
   }
 
   if (action === 'finalizar' && req.method === 'POST') {
