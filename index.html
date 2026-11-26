@@ -274,9 +274,10 @@
                 <div class="count-input-section">
                     <!-- Modo 1: Calculadora Rápida / Ingreso por Fórmulas -->
                     <div class="input-group">
-                        <label for="count-expression">Cantidad Contada (Soporta sumas, ej: 10+20+5)</label>
+                        <label for="count-expression">Cantidad Contada (se suma a lo guardado; use - para restar, ej: 10+20 o -5)</label>
+                        <p id="count-base" class="count-base" hidden></p>
                         <div class="expression-input-wrapper">
-                            <input type="text" id="count-expression" aria-label="Cantidad contada" placeholder="0" inputmode="decimal" autocomplete="off">
+                            <input type="text" id="count-expression" aria-label="Cantidad a sumar o restar" placeholder="0" inputmode="decimal" autocomplete="off">
                             <div id="expression-preview" class="expression-preview" style="display: none;">= 0</div>
                         </div>
                     </div>

@@ -157,6 +157,7 @@ const DOM = {
     expressionPreview: document.getElementById('expression-preview'),
     quickAdjustButtons: document.querySelectorAll('.btn-adjust'),
     summaryTotalCounted: document.getElementById('summary-total-counted'),
+    countBase: document.getElementById('count-base'),
     historyTitle: document.getElementById('history-title'),
     historyList: document.getElementById('history-list'),
     historyEmpty: document.getElementById('history-empty')
@@ -771,9 +772,12 @@ function openCountingModal(item) {
         DOM.modalArticleImg.hidden = true;
     }
     
-    // Campo de cantidad: si ya se contó, muestra lo contado para corregirlo o sumarle (ej. 7+3)
-    DOM.countExpression.value = selectedItem.contado !== null ? String(selectedItem.contado) : '';
+    // Campo de cantidad siempre en blanco: lo que se escriba se suma (o resta con -) a lo ya guardado
+    selectedItem.guardado = item.contado;   // null = pendiente
+    DOM.countExpression.value = '';
     DOM.expressionPreview.style.display = 'none';
+    DOM.countBase.textContent = item.contado !== null ? `Ya guardado en este conteo: ${item.contado}` : '';
+    DOM.countBase.hidden = item.contado === null;
     renderHistory(selectedItem);
     
     // Calcular totales del modal
@@ -883,55 +887,52 @@ function safeEvaluate(str) {
     }
 }
 
-// Suma el input aritmético + el historial acumulado
-function calculateModalTotal() {
-    if (!selectedItem) return;
-    
-    const exprValue = DOM.countExpression.value.trim();
-    let exprParsed = safeEvaluate(exprValue);
-    
-    // Controlar el preview visual de la fórmula
-    if (exprValue !== '' && (exprValue.includes('+') || exprValue.includes('-') || exprValue.includes('*') || exprValue.includes('/'))) {
-        if (isNaN(exprParsed)) {
-            DOM.expressionPreview.textContent = 'Expresión inválida';
-            DOM.expressionPreview.style.color = 'var(--danger)';
-            DOM.expressionPreview.style.display = 'block';
-            exprParsed = 0;
-        } else if (exprParsed < 0) {
-            DOM.expressionPreview.textContent = `= ${exprParsed} (no puede ser negativo)`;
-            DOM.expressionPreview.style.color = 'var(--danger)';
-            DOM.expressionPreview.style.display = 'block';
-            exprParsed = 0;
-        } else {
-            DOM.expressionPreview.textContent = `= ${exprParsed}`;
-            DOM.expressionPreview.style.color = 'var(--success)';
-            DOM.expressionPreview.style.display = 'block';
-        }
-    } else {
-        DOM.expressionPreview.style.display = 'none';
-        if (isNaN(exprParsed) || exprParsed < 0) exprParsed = 0;
-    }
-    
-    const totalCounted = round2(exprParsed);
-    
-    // Guardar conteo momentáneo en el clon
-    selectedItem.contado = totalCounted;
-    
-    // Actualizar UI del modal
-    DOM.summaryTotalCounted.textContent = selectedItem.contado;
+// Calcula el total nuevo: lo ya guardado + lo escrito (positivo suma, negativo resta).
+// Devuelve { base, delta, total, valido }.
+function computeNewTotal() {
+    const base = selectedItem && selectedItem.guardado !== null && selectedItem.guardado !== undefined ? selectedItem.guardado : 0;
+    const expr = DOM.countExpression.value.trim();
+    const delta = safeEvaluate(expr);
+    if (expr === '' || isNaN(delta)) return { base, delta: 0, total: base, valido: expr === '', vacio: expr === '' };
+    const total = round2(base + delta);
+    return { base, delta: round2(delta), total, valido: total >= 0, vacio: false };
 }
 
-// Permite usar botones +1, +5, -10 sobre el input actual
+// Muestra la operación (ej. "7 + 3 = 10") y el total resultante
+function calculateModalTotal() {
+    if (!selectedItem) return;
+    const expr = DOM.countExpression.value.trim();
+    const { base, delta, total, valido, vacio } = computeNewTotal();
+    const preview = DOM.expressionPreview;
+
+    if (vacio) {
+        preview.style.display = 'none';
+    } else if (isNaN(safeEvaluate(expr))) {
+        preview.textContent = 'Expresión inválida';
+        preview.style.color = 'var(--danger)';
+        preview.style.display = 'block';
+    } else {
+        const operacion = `${base} ${delta < 0 ? '−' : '+'} ${Math.abs(delta)} = ${total}`;
+        preview.textContent = valido ? operacion : `${operacion} (el total no puede quedar negativo)`;
+        preview.style.color = valido ? 'var(--success)' : 'var(--danger)';
+        preview.style.display = 'block';
+    }
+
+    // Sin nada escrito se muestra lo ya guardado ("-" si está pendiente)
+    const sinCambio = vacio || !valido || isNaN(safeEvaluate(expr));
+    DOM.summaryTotalCounted.textContent = sinCambio
+        ? (selectedItem.guardado !== null && selectedItem.guardado !== undefined ? selectedItem.guardado : '-')
+        : total;
+}
+
+// Botones +1, +5, -10: ajustan la cantidad a sumar/restar (sin dejar el total en negativo)
 function adjustExpressionCount(val) {
     const exprValue = DOM.countExpression.value.trim();
-    let currentVal = safeEvaluate(exprValue);
-    
-    if (isNaN(currentVal) || exprValue === '') {
-        currentVal = 0;
-    }
-    
-    const newVal = Math.max(0, currentVal + val); // no permitir totales negativos
-    DOM.countExpression.value = newVal;
+    let actual = safeEvaluate(exprValue);
+    if (isNaN(actual) || exprValue === '') actual = 0;
+    const base = selectedItem && selectedItem.guardado ? selectedItem.guardado : 0;
+    const nuevo = round2(Math.max(-base, actual + val));
+    DOM.countExpression.value = nuevo === 0 ? '' : String(nuevo);
     calculateModalTotal();
     DOM.countExpression.focus();
 }
@@ -941,32 +942,26 @@ let savingCount = false;
 async function saveCount() {
     if (!selectedItem || savingCount) return;
     
-    // No guardar si la expresión escrita es inválida o negativa
-    const rawExpr = DOM.countExpression.value.trim();
-    if (rawExpr !== '') {
-        const parsed = safeEvaluate(rawExpr);
-        if (isNaN(parsed) || parsed < 0) {
-            alert('La cantidad escrita no es válida. Corríjala antes de guardar.');
-            DOM.countExpression.focus();
-            return;
-        }
-    }
-
-    // Si el usuario tiene una expresión incompleta o no procesada en el input principal,
-    // se sumará antes de guardar.
-    calculateModalTotal();
-    
     const realIndex = inventory.findIndex(item => item.id === selectedItem.id);
     if (realIndex === -1) return closeCountingModal();
 
-    // Una sola línea con lo escrito (incluso 0). Campo vacío = artículo pendiente.
-    const hasInput = rawExpr !== '';
-    if (!hasInput && inventory[realIndex].contado !== null &&
-        !confirm('El campo de cantidad está vacío. ¿Quitar el conteo de este artículo y dejarlo pendiente?')) {
+    const rawExpr = DOM.countExpression.value.trim();
+    // Campo vacío: no hay nada que sumar ni restar, se cierra sin cambios
+    if (rawExpr === '') return closeCountingModal();
+
+    if (isNaN(safeEvaluate(rawExpr))) {
+        alert('La cantidad escrita no es válida. Corríjala antes de guardar.');
         DOM.countExpression.focus();
         return;
     }
-    const lineas = hasInput ? [{ cantidad: round2(safeEvaluate(rawExpr)), detalle: 'Directo' }] : [];
+    const { base, total, valido } = computeNewTotal();
+    if (!valido) {
+        alert(`El total no puede quedar negativo.\n\nYa guardado: ${base}\nEscrito: ${rawExpr}\nResultado: ${total}`);
+        DOM.countExpression.focus();
+        return;
+    }
+    // Se envía el total ya calculado (no la diferencia): si la red falla y se reintenta, no se suma dos veces
+    const lineas = [{ cantidad: total, detalle: 'Directo' }];
 
     savingCount = true;
     DOM.modalSaveBtn.disabled = true;

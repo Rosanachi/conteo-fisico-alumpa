@@ -1326,3 +1326,6 @@ body {
 /* El total ocupa todo el recuadro (ya no hay columna de diferencia) */
 .calculation-summary { grid-template-columns: 1fr; }
 .calculation-summary .summary-item:first-child { border-right: none; }
+
+/* Cantidad ya guardada (el campo suma o resta sobre ella) */
+.count-base { margin: 0; font-size: .9rem; color: var(--primary); font-weight: 600; }

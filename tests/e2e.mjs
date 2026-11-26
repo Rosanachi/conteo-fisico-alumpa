@@ -136,38 +136,69 @@ T('en la base quedó 7 (3+4) en 1 línea', guardado.s === 7 && guardado.n === 1,
 
 // Modal simplificado: sin "Acumular conteos parciales"; al reabrir muestra lo contado para corregir o sumar
 T('el modal ya no tiene cantidad/ubicación/Agregar', (await pg1.$('#partial-qty')) === null && (await pg1.$('#add-partial-btn')) === null && (await pg1.$('.accumulative-section')) === null);
-await pg1.click('#items-table-body tr');
-await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
-T('al reabrir, el campo muestra lo contado (7)', (await pg1.$eval('#count-expression', e => e.value)) === '7');
-await pg1.$eval('#count-expression', e => { e.value = ''; });
-await pg1.type('#count-expression', '7+3');
-await pg1.click('#modal-save-btn');
-await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
-const corregido = (await pg.query('SELECT sum(cantidad)::float8 s, count(*)::int n FROM conteo_lineas')).rows[0];
-T('corregir a 7+3 guarda 10 en una sola línea', corregido.s === 10 && corregido.n === 1, JSON.stringify(corregido));
-await pg1.click('#items-table-body tr');
-await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
-await pg1.$eval('#count-expression', e => { e.value = ''; e.dispatchEvent(new Event('input')); });
-const antes = dialogos.length;
-pg1.removeAllListeners('dialog');
-pg1.on('dialog', async d => { dialogos.push(d.message()); await d.dismiss(); });
-await pg1.click('#modal-save-btn');
-await new Promise(r => setTimeout(r, 500));
-T('vaciar el campo pide confirmación y al cancelar no borra', dialogos.length === antes + 1 && /pendiente/.test(dialogos.at(-1)) &&
-  (await pg.query('SELECT count(*)::int n FROM conteo_lineas')).rows[0].n === 1 && await pg1.$eval('#counting-modal', m => m.classList.contains('active')));
-pg1.removeAllListeners('dialog');
-pg1.on('dialog', async d => { dialogos.push(d.message()); await d.accept(); });
-await pg1.type('#count-expression', '7');
-await pg1.click('#modal-save-btn');
-await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
-T('se restablece a 7 para el resto de la prueba', (await pg.query('SELECT sum(cantidad)::float8 s FROM conteo_lineas')).rows[0].s === 7);
+const abrirModal = async () => {
+  await pg1.click('#items-table-body tr');
+  await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
+};
+const guardarModal = async () => {
+  await pg1.click('#modal-save-btn');
+  return esperar(() => !document.getElementById('counting-modal').classList.contains('active'), 3000);
+};
+const totalBase = async () => (await pg.query('SELECT sum(cantidad)::float8 s, count(*)::int n FROM conteo_lineas')).rows[0];
 
-// Historial en la ventana: 3 guardados (7, 10, 7); el intento cancelado no cuenta
+// Al editar, el campo sale en blanco y muestra lo ya guardado
+await abrirModal();
+T('editar: el campo de cantidad sale en blanco', (await pg1.$eval('#count-expression', e => e.value)) === '');
+T('editar: muestra lo ya guardado (7)', await vis('#count-base') && /Ya guardado en este conteo: 7/.test(await texto('#count-base')), await texto('#count-base'));
+T('editar: el total muestra lo guardado mientras no se escriba nada', (await texto('#summary-total-counted')) === '7');
+
+// Sumar: 7 + 3 = 10
+await pg1.type('#count-expression', '3');
+T('sumar: la vista previa muestra 7 + 3 = 10', /7 \+ 3 = 10/.test(await texto('#expression-preview')) && (await texto('#summary-total-counted')) === '10', await texto('#expression-preview'));
+await guardarModal();
+let tb = await totalBase();
+T('sumar: se guarda 10 (en una sola línea)', tb.s === 10 && tb.n === 1, JSON.stringify(tb));
+
+// Campo vacío: cierra sin cambios ni registro en el historial
+await abrirModal();
+await guardarModal();
+T('campo vacío: cierra sin cambiar lo guardado ni registrar en el historial', (await totalBase()).s === 10 &&
+  (await pg.query('SELECT count(*)::int c FROM conteo_historial')).rows[0].c === 2);
+
+// Restar más de lo guardado: avisa y no guarda
+await abrirModal();
+await pg1.type('#count-expression', '-20');
+T('restar de más: la vista previa avisa que no puede quedar negativo', /no puede quedar negativo/.test(await texto('#expression-preview')), await texto('#expression-preview'));
+const avisos = dialogos.length;
+await pg1.click('#modal-save-btn');
+await new Promise(r => setTimeout(r, 400));
+T('restar de más: no se guarda y la ventana sigue abierta', dialogos.length === avisos + 1 && /no puede quedar negativo/.test(dialogos.at(-1)) &&
+  (await totalBase()).s === 10 && await pg1.$eval('#counting-modal', m => m.classList.contains('active')), dialogos.at(-1));
+
+// Borrar todo lo contado: restar lo guardado (10 - 10 = 0)
+await pg1.$eval('#count-expression', e => { e.value = ''; });
+await pg1.type('#count-expression', '-10');
+await guardarModal();
+tb = await totalBase();
+T('restar todo: -10 deja el artículo en 0', tb.s === 0 && tb.n === 1, JSON.stringify(tb));
+
+// Botones -1/+5 trabajan sobre la cantidad a sumar y no dejan el total en negativo
+await abrirModal();
+await pg1.click('.btn-adjust[data-val="-1"]');
+T('botón -1 con 0 guardado no baja de 0', (await pg1.$eval('#count-expression', e => e.value)) === '');
+await pg1.click('.btn-adjust[data-val="5"]');
+await pg1.click('.btn-adjust[data-val="1"]');
+await pg1.click('.btn-adjust[data-val="1"]');
+T('botones +5 +1 +1 suman 7', (await pg1.$eval('#count-expression', e => e.value)) === '7' && (await texto('#summary-total-counted')) === '7');
+await guardarModal();
+T('se restablece a 7 para el resto de la prueba', (await totalBase()).s === 7);
+
+// Historial en la ventana: 4 guardados (7, 10, 0, 7); el vacío y el rechazado no cuentan
 await pg1.click('#items-table-body tr');
 await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
 const hist = await pg1.$$eval('#history-list li', l => l.map(x => x.querySelector('.history-qty').textContent + (x.querySelector('.history-tag') ? '*' : '')));
-T('historial: lista las 3 veces, la más reciente arriba y marcada como vigente', hist.join(',') === '7*,10,7', hist.join(','));
-T('historial: el título indica el número de veces', /Veces contado en este conteo: 3/.test(await texto('#history-title')), await texto('#history-title'));
+T('historial: lista las 4 veces, la más reciente arriba y marcada como vigente', hist.join(',') === '7*,0,10,7', hist.join(','));
+T('historial: el título indica el número de veces', /Veces contado en este conteo: 4/.test(await texto('#history-title')), await texto('#history-title'));
 await pg1.screenshot({ path: 'E:/KIRO/tools-conteo/modal_historial.png' });
 T('historial: cada vez muestra la hora', await pg1.$$eval('#history-list .history-time', t => t.every(x => /^\d{1,2}:\d{2}/.test(x.textContent.trim()))));
 await pg1.click('#modal-cancel-btn');
@@ -177,7 +208,7 @@ await esperar(() => document.querySelectorAll('#items-table-body tr').length > 0
 await pg1.type('#search-input', 'PAANG00830BLS19');
 await pg1.keyboard.press('Enter');
 await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
-T('historial: se conserva al recargar la página', (await pg1.$$eval('#history-list li', l => l.length)) === 3);
+T('historial: se conserva al recargar la página', (await pg1.$$eval('#history-list li', l => l.length)) === 4);
 await pg1.click('#modal-cancel-btn');
 await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
 await pg1.$eval('#search-input', e => { e.value = ''; e.dispatchEvent(new Event('input')); });
