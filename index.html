@@ -102,6 +102,17 @@
                 </div>
                 <p id="inv-progress" class="form-ok" role="status" hidden></p>
                 <div id="inv-result" class="admin-result" hidden></div>
+
+                <h3 class="admin-subtitle">Buscar y borrar artículos</h3>
+                <p class="upload-hint">Los artículos que ya aparecen en un conteo no se borran. Para quitarlos, borre primero ese conteo en la sección Conteos.</p>
+                <form id="art-form" class="admin-actions">
+                    <select id="art-sucursal" class="text-input admin-select" aria-label="Sucursal"></select>
+                    <input id="art-q" class="text-input admin-search" type="search" placeholder="Código, alterno o nombre" aria-label="Buscar artículo" autocomplete="off">
+                    <button class="btn btn-secondary" type="submit">Buscar</button>
+                    <button id="art-delete-all-btn" class="btn btn-danger-outline" type="button">Borrar listado</button>
+                </form>
+                <p id="art-msg" class="form-ok" role="status"></p>
+                <div id="art-list" class="table-responsive-wrapper user-list-wrap"></div>
             </section>
 
             <section class="card admin-card">

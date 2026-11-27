@@ -357,6 +357,43 @@ await esperar(() => /no coincide/.test(window.__lastAlert || ''), 1500);
 await new Promise(r => setTimeout(r, 800));
 T('si no escribe BORRAR exacto, no se borra nada', /no coincide/.test(dialogos.at(-1) || '') && (await pg.query('SELECT count(*)::int c FROM conteos')).rows[0].c === 1, dialogos.at(-1));
 
+// ---- Buscar y borrar artículos del inventario ----
+pg1.removeAllListeners('dialog');
+pg1.on('dialog', async d => { dialogos.push(d.message()); await (d.type() === 'prompt' ? d.accept('BORRAR') : d.accept()); });
+const nArt = async (suc) => (await pg.query('SELECT count(*)::int c FROM articulos WHERE ($1::int IS NULL OR sucursal_id=$1)', [suc ?? null])).rows[0].c;
+const buscarArt = async (texto) => {
+  await pg1.$eval('#art-q', (e, v) => { e.value = v; }, texto);
+  await pg1.click('#art-form button[type=submit]');
+  await new Promise(r => setTimeout(r, 300));
+};
+await buscarArt('EMCAU00006NEG00');
+T('buscar artículo: aparece en la lista', await esperar(() => /EMCAU00006NEG00/.test(document.getElementById('art-list').textContent)));
+await pg1.click('#art-list tbody tr button.btn-danger-outline');
+T('borrar un artículo: se borra y desaparece', await esperar(() => /borrado/.test(document.getElementById('art-msg').textContent)) &&
+  (await pg.query("SELECT count(*)::int c FROM articulos WHERE codigo='EMCAU00006NEG00'")).rows[0].c === 0 && /Borrar el artículo EMCAU00006NEG00/.test(dialogos.find(m => /EMCAU00006NEG00/.test(m)) || ''));
+
+const contadoCod = (await pg.query('SELECT a.codigo FROM articulos a WHERE a.id=$1', [artC])).rows[0].codigo;
+await buscarArt(contadoCod);
+await esperar(() => document.querySelectorAll('#art-list tbody tr').length > 0);
+const filaContado = await pg1.$$eval('#art-list tbody tr', (trs, cod) => { const t = trs.find(x => x.cells[0].textContent === cod && x.cells[3].textContent === 'Capital'); return t ? { dis: t.querySelector('button').disabled, tag: /En conteo/.test(t.textContent) } : null; }, contadoCod);
+T('un artículo que está en un conteo no se puede borrar (botón desactivado)', filaContado && filaContado.dis && filaContado.tag, JSON.stringify(filaContado));
+
+const davidN = await nArt(david);
+await pg1.select('#art-sucursal', String(david));
+await new Promise(r => setTimeout(r, 300));
+await pg1.click('#art-delete-all-btn');
+const respaldoInv = await esperarArchivo('respaldo_inventario_David_');
+T('borrar listado: descarga el respaldo de David', !!respaldoInv, fs.readdirSync(dir).join());
+T('borrar listado: borra todos los artículos de David y no toca Capital', await esperar(() => true) && (await nArt(david)) === 0 && (await nArt(capital)) > 1000);
+await new Promise(r => setTimeout(r, 800));
+T('borrar listado: informa cuántos se borraron', dialogos.some(m => new RegExp('Se borraron ' + davidN + ' artículo').test(m)), dialogos.slice(-2).join(' | '));
+if (respaldoInv) {
+  const rows = XLSX.utils.sheet_to_json(XLSX.readFile(respaldoInv).Sheets.Inventario);
+  T('el respaldo tiene las columnas de la plantilla y todos los artículos', rows.length === davidN &&
+    Object.keys(rows[0]).join('|') === 'Código|Alterno|Nombre|Sucursal|Costo|Existencia' && rows.every(x => x.Sucursal === 'David'), Object.keys(rows[0] || {}).join('|'));
+}
+T('el resumen por sucursal se actualiza (David en 0)', await esperar(() => /0\s*David/.test(document.getElementById('inv-resumen').textContent)));
+
 await pg1.screenshot({ path: 'E:/KIRO/tools-conteo/e2e_final.png', fullPage: true });
 T('sin errores de JavaScript en la consola', errores.length === 0, errores.join(' | '));
 await br.close();

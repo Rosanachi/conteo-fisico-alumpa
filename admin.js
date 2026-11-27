@@ -48,6 +48,9 @@ async function initAdmin() {
         $a('cnt-all-btn').addEventListener('click', () => exportar(null, false));
         $a('cnt-all-wa-btn').addEventListener('click', () => exportar(null, true));
         $a('cnt-delete-all-btn').addEventListener('click', borrarTodos);
+        $a('art-form').addEventListener('submit', e => { e.preventDefault(); buscarArticulos(); });
+        $a('art-sucursal').addEventListener('change', buscarArticulos);
+        $a('art-delete-all-btn').addEventListener('click', borrarListado);
     }
     await refreshResumen();
     await Promise.all([refreshUsers(), refreshConteos()]);
@@ -55,7 +58,9 @@ async function initAdmin() {
 
 // Se llama al cerrar sesión: nada del panel queda en pantalla
 function clearAdminData() {
-    ['inv-resumen', 'user-list', 'inv-result', 'cnt-list', 'cnt-abiertos'].forEach(id => $a(id).replaceChildren());
+    ['inv-resumen', 'user-list', 'inv-result', 'cnt-list', 'cnt-abiertos', 'art-list'].forEach(id => $a(id).replaceChildren());
+    $a('art-msg').textContent = '';
+    $a('art-q').value = '';
     $a('cnt-abiertos').hidden = true;
     $a('inv-result').hidden = true;
     $a('inv-progress').hidden = true;
@@ -73,11 +78,14 @@ async function refreshResumen() {
         const sel = $a('user-sucursal');
         sel.replaceChildren(new Option('Todas las sucursales', ''));
         sucursales.forEach(s => sel.add(new Option(s.nombre, s.id)));
-        const filtro = $a('cnt-sucursal');
-        const actual = filtro.value;
-        filtro.replaceChildren(new Option('Todas las sucursales', ''));
-        sucursales.forEach(s => filtro.add(new Option(s.nombre, s.id)));
-        filtro.value = actual;
+        // El filtro de conteos usa solo el nombre (se usa en el nombre del Excel); el de artículos muestra la cantidad
+        for (const [id, conCantidad] of [['cnt-sucursal', false], ['art-sucursal', true]]) {
+            const filtro = $a(id);
+            const actual = filtro.value;
+            filtro.replaceChildren(new Option('Todas las sucursales', ''));
+            sucursales.forEach(s => filtro.add(new Option(conCantidad ? `${s.nombre} (${s.articulos})` : s.nombre, s.id)));
+            filtro.value = actual;
+        }
     } catch (e) {
         $a('inv-resumen').textContent = e.message;
     }
@@ -166,6 +174,97 @@ async function downloadInventoryTemplate() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Inventario');
     XLSX.writeFile(wb, 'plantilla_inventario.xlsx');
+}
+
+// ---------- Buscar y borrar artículos del inventario ----------
+const artSucursalNombre = () => $a('art-sucursal').value ? ADMIN.sucursales.find(s => String(s.id) === $a('art-sucursal').value)?.nombre : null;
+
+async function buscarArticulos() {
+    const suc = $a('art-sucursal').value;
+    const q = $a('art-q').value.trim();
+    const box = $a('art-list');
+    try {
+        const { total, articulos } = await api('/api/inventario?action=buscar' + (suc ? '&sucursal=' + encodeURIComponent(suc) : '') + (q ? '&q=' + encodeURIComponent(q) : ''));
+        if (!articulos.length) {
+            box.replaceChildren(el('p', { class: 'upload-hint', textContent: q ? 'No se encontraron artículos con ese texto.' : 'No hay artículos en el inventario.' }));
+            return;
+        }
+        const tbody = el('tbody');
+        articulos.forEach(a => {
+            const td = el('td', { class: 'user-actions' });
+            const b = el('button', { type: 'button', class: 'btn btn-danger-outline btn-sm', textContent: 'Borrar' });
+            if (a.en_conteo) {
+                b.disabled = true;
+                b.title = 'Está en un conteo: borre primero ese conteo';
+                td.append(el('span', { class: 'art-tag', textContent: 'En conteo' }));
+            } else {
+                b.addEventListener('click', () => borrarArticulo(a, b));
+            }
+            td.append(b);
+            tbody.append(el('tr', {},
+                el('td', { textContent: a.codigo }), el('td', { textContent: a.alterno || '-' }), el('td', { textContent: a.nombre }),
+                el('td', { textContent: a.sucursal }), el('td', { class: 'num-col', textContent: String(a.existencia) }), td));
+        });
+        const thead = el('thead', {}, el('tr', {}, ...['Código', 'Alterno', 'Nombre', 'Sucursal', 'Existencia', ''].map(t => el('th', { textContent: t }))));
+        const nodos = [el('table', { class: 'items-table user-table' }, thead, tbody)];
+        if (total > articulos.length) nodos.unshift(el('p', { class: 'upload-hint', textContent: `Mostrando ${articulos.length} de ${total}. Escriba más texto para acotar la búsqueda.` }));
+        box.replaceChildren(...nodos);
+    } catch (e) {
+        box.textContent = e.message;
+    }
+}
+
+async function borrarArticulo(a, boton) {
+    if (!confirm(`¿Borrar el artículo ${a.codigo} (${a.nombre}) de ${a.sucursal}?\n\nPodrá volver a agregarlo subiendo el Excel.`)) return;
+    boton.disabled = true;
+    try {
+        const r = await api('/api/inventario?action=borrar', { method: 'POST', body: { ids: [a.id] } });
+        $a('art-msg').textContent = r.borrados
+            ? `Artículo ${a.codigo} borrado.`
+            : `No se borró ${a.codigo}: empezó a contarse. Borre primero ese conteo.`;
+        await refreshResumen();
+        await buscarArticulos();
+    } catch (e) {
+        alert('No se pudo borrar el artículo: ' + e.message);
+        boton.disabled = false;
+    }
+}
+
+// Borra el listado de la sucursal elegida (o de todas). Antes descarga un Excel de respaldo que se puede volver a subir.
+async function borrarListado() {
+    const sucId = $a('art-sucursal').value;
+    const nombre = artSucursalNombre();
+    const alcance = nombre ? `de ${nombre}` : 'de TODAS las sucursales';
+    if (!confirm(`¿Borrar todo el listado de artículos ${alcance}?\n\nAntes se descargará un Excel de respaldo que puede volver a subir. Los artículos que estén en un conteo no se borran.`)) return;
+    const escrito = prompt('Esta acción no se puede deshacer. Escriba BORRAR para confirmar:');
+    if (escrito === null) return;
+    if (escrito.trim() !== 'BORRAR') { alert('No se borró nada: el texto no coincide.'); return; }
+    const btn = $a('art-delete-all-btn');
+    btn.disabled = true;
+    try {
+        await loadXlsx();
+        const { articulos } = await api('/api/inventario?action=listado' + (sucId ? '&sucursal=' + encodeURIComponent(sucId) : ''));
+        if (!articulos.length) { alert('No hay artículos para borrar.'); return; }
+        // Respaldo con las mismas columnas de la plantilla de carga
+        const ws = XLSX.utils.json_to_sheet(articulos.map(a => ({
+            'Código': a.codigo, 'Alterno': a.alterno, 'Nombre': a.nombre, 'Sucursal': a.sucursal, 'Costo': a.costo, 'Existencia': a.existencia
+        })), { header: ['Código', 'Alterno', 'Nombre', 'Sucursal', 'Costo', 'Existencia'] });
+        ws['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 40 }, { wch: 12 }, { wch: 10 }, { wch: 12 }];
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Inventario');
+        const fecha = fmtFecha(new Date().toISOString()).replace(/[ :]/g, '-');
+        XLSX.writeFile(wb, `respaldo_inventario_${nombre ? nombreSeguro(nombre) : 'todas'}_${fecha}.xlsx`);
+
+        const r = await api('/api/inventario?action=borrar-todos', { method: 'POST', body: { confirmar: 'BORRAR', sucursal_id: sucId || null } });
+        alert(`Se borraron ${r.borrados} artículo(s).` + (r.omitidos ? `\n${r.omitidos} no se borraron porque están en un conteo.` : '') + '\nEl respaldo quedó en sus descargas.');
+        $a('art-msg').textContent = '';
+        await refreshResumen();
+        await buscarArticulos();
+    } catch (e) {
+        alert('No se pudo borrar el listado: ' + e.message);
+    } finally {
+        btn.disabled = false;
+    }
 }
 
 // ---------- Usuarios ----------
