@@ -215,12 +215,28 @@ await pg1.click('#modal-cancel-btn');
 await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
 await pg1.$eval('#search-input', e => { e.value = ''; e.dispatchEvent(new Event('input')); });
 
+// Fotos por código: un artículo del listado "sin aluminio" (no tiene imagen en el catálogo PDF)
+const fotosIdx = JSON.parse(fs.readFileSync(ROOT + '/fotos/index.json', 'utf8')).items;
+await pg.query("INSERT INTO articulos (sucursal_id, codigo, alterno, nombre, costo, existencia) SELECT id, 'EMCAU00006NEG00', 'FVC0006', 'EMPAQ.SOPORTE 25 X 1.6 MM', 1, 1 FROM sucursales WHERE nombre='Capital'");
+
 // Recargar: el conteo abierto se retoma
 await pg1.reload({ waitUntil: 'networkidle0' });
 T('al recargar se retoma el conteo abierto', await esperar(() => document.getElementById('dashboard-view').classList.contains('active-view') && document.querySelectorAll('#items-table-body tr').length > 0));
 T('...con lo ya contado (1)', (await texto('#stat-counted')) === '1');
 const ls = await pg1.evaluate(() => Object.keys(localStorage).filter(k => /inventory|filename/.test(k)));
 T('el navegador no guarda el inventario', ls.length === 0, ls.join());
+
+await pg1.type('#search-input', 'EMCAU00006NEG00');
+await new Promise(r => setTimeout(r, 400));
+const fotoOk = await esperar(() => { const i = document.querySelector('#items-table-body tr img.thumb-img'); return i && i.complete && i.naturalWidth > 0; }, 6000);
+const fotoSrc = await pg1.$eval('#items-table-body tr img.thumb-img', i => i.getAttribute('src')).catch(() => null);
+T('fotos por código: el artículo muestra su foto del listado', fotoOk && fotoSrc === 'fotos/' + fotosIdx['EMCAU00006NEG00'], String(fotoSrc));
+await pg1.keyboard.press('Enter');
+await esperar(() => document.getElementById('counting-modal').classList.contains('active'));
+T('fotos por código: la foto también aparece en la ventana de conteo', await esperar(() => { const i = document.getElementById('modal-article-img'); return !i.hidden && i.complete && i.naturalWidth > 0; }, 6000));
+await pg1.click('#modal-cancel-btn');
+await esperar(() => !document.getElementById('counting-modal').classList.contains('active'));
+await pg1.$eval('#search-input', e => { e.value = ''; e.dispatchEvent(new Event('input')); });
 
 // Finalizar
 await pg1.click('#finish-count-btn');

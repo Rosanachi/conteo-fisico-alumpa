@@ -59,8 +59,26 @@ function asignarImagenAutomatica(item) {
     return item;
 }
 
+// Fotos asignadas por código de artículo (columna FOTO del listado). Tienen prioridad sobre el catálogo PDF.
+const FOTOS = { index: null, base: 'fotos/' };
+
+async function loadFotosIndex() {
+    try {
+        const r = await fetch(FOTOS.base + 'index.json');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        FOTOS.index = (await r.json()).items || {};
+    } catch (e) {
+        console.warn('Fotos por código no disponibles:', e);
+        FOTOS.index = {};
+        return;
+    }
+    if (inventory.length && typeof renderList === 'function') renderList();
+}
+
 // URL de la imagen del artículo o null (sin match, ambiguo o índice no cargado)
 function imageUrlFor(item) {
+    const foto = FOTOS.index && FOTOS.index[String(item.codigo ?? '').trim()];
+    if (foto) return FOTOS.base + foto;
     let code = item.imgCode;
     let key4 = item.imgKey;
     if (item.imgState !== 'manual' && !code) {   // artículos guardados antes de esta función, o índice cargado después
@@ -173,6 +191,7 @@ function init() {
     registerServiceWorker();
     startSession();
     loadCatalogIndex();
+    loadFotosIndex();
     // Si una imagen falla (sin conexión o archivo ausente) se muestra el recuadro vacío
     document.addEventListener('error', (e) => {
         const t = e.target;
